@@ -544,7 +544,10 @@ def _make_hand_candidates(result, width: int, height: int) -> list[_HandCandidat
                 handedness=handedness,
                 handedness_score=handedness_score,
                 quality=quality,
-                gesture=_gesture_label_for_hand(result, index),
+                gesture=(
+                    _index_thumb_gesture(image_points, world_points)
+                    or _gesture_label_for_hand(result, index)
+                ),
             )
         )
     return candidates
@@ -563,6 +566,75 @@ def _gesture_label_for_hand(result, index: int) -> str:
         "Closed_Fist": "CLOSED FIST",
         "Thumb_Up": "THUMBS UP",
     }.get(str(getattr(category, "category_name", "")), UNKNOWN)
+
+
+def _index_thumb_gesture(
+    image_points: np.ndarray,
+    world_points: np.ndarray,
+) -> str | None:
+    """Recognize an index-and-thumb pointer pose and its pinch action.
+
+    The index finger and thumb must be extended while the other three fingers
+    are curled. Keeping the pinch label separate from a fist prevents a pinch
+    from being treated as a right-click by the desktop controller.
+    """
+    image = np.asarray(image_points, dtype=np.float64)
+    world = np.asarray(world_points, dtype=np.float64)
+    if (
+        image.ndim != 2
+        or world.ndim != 2
+        or image.shape[0] < 21
+        or world.shape[0] < 21
+        or image.shape[1] < 2
+        or world.shape[1] < 3
+        or not np.all(np.isfinite(image[:21, :2]))
+        or not np.all(np.isfinite(world[:21, :3]))
+    ):
+        return None
+
+    palm_width = float(np.linalg.norm(world[5] - world[17]))
+    if palm_width < 1e-5:
+        return None
+    palm_center = np.mean(world[[0, 5, 9, 13, 17]], axis=0)
+
+    index_pip = _joint_angle(world[5], world[6], world[7])
+    index_dip = _joint_angle(world[6], world[7], world[8])
+    index_tip_ratio = float(np.linalg.norm(world[8] - palm_center) / palm_width)
+    index_extended = (
+        np.isfinite(index_pip)
+        and np.isfinite(index_dip)
+        and index_pip >= 145.0
+        and index_dip >= 135.0
+        and index_tip_ratio >= 0.78
+    )
+
+    thumb_angle = _joint_angle(world[2], world[3], world[4])
+    thumb_length_ratio = float(np.linalg.norm(world[4] - world[2]) / palm_width)
+    thumb_extended = (
+        np.isfinite(thumb_angle)
+        and thumb_angle >= 140.0
+        and thumb_length_ratio >= 0.48
+    )
+
+    curled_fingers = []
+    for mcp, pip, dip, tip in (
+        (9, 10, 11, 12),
+        (13, 14, 15, 16),
+        (17, 18, 19, 20),
+    ):
+        pip_angle = _joint_angle(world[mcp], world[pip], world[dip])
+        tip_ratio = float(np.linalg.norm(world[tip] - palm_center) / palm_width)
+        curled_fingers.append(
+            np.isfinite(pip_angle) and pip_angle <= 145.0 and tip_ratio <= 1.25
+        )
+
+    if not (index_extended and thumb_extended and all(curled_fingers)):
+        return None
+
+    tip_gap_ratio = float(np.linalg.norm(world[4] - world[8]) / palm_width)
+    if not np.isfinite(tip_gap_ratio):
+        return None
+    return "PINCH" if tip_gap_ratio <= 0.42 else "POINTING"
 
 
 def _landmark_signature(world_points: np.ndarray) -> np.ndarray:
@@ -1574,7 +1646,14 @@ def _apply_hand_candidate(
         del track.gesture_history[0]
     counts = {
         gesture: track.gesture_history.count(gesture)
-        for gesture in ("OPEN HAND", "CLOSED FIST", "THUMBS UP", UNKNOWN)
+        for gesture in (
+            "OPEN HAND",
+            "CLOSED FIST",
+            "THUMBS UP",
+            "POINTING",
+            "PINCH",
+            UNKNOWN,
+        )
     }
     stable, votes = max(counts.items(), key=lambda item: item[1])
     if votes >= GESTURE_CONFIRM_HITS:
