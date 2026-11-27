@@ -346,7 +346,7 @@ class LiquidGlassWindow(DetectionWindow):
             self.gesture_control_button.grid(row=4, column=0, sticky="ew", pady=(9, 0))
             self.gesture_guide = ttk.Label(
                 card.body,
-                text="PALM: move cursor  ·  THUMBS UP: left-click\nCLOSED FIST: right-click  ·  PINCH: hold/drag\nOPEN HAND: release  ·  OPEN HAND + WRIST TWIST: scroll",
+                text="POINTING: index + thumb open; aim with index tip\nPINCH: hold/drag  ·  OPEN HAND: release + wrist-twist scroll\nTHUMBS UP: left-click  ·  CLOSED FIST: right-click",
                 style="Muted.TLabel",
                 wraplength=280,
                 justify="left",

@@ -14,10 +14,9 @@ import numpy as np
 class GestureMouseController:
     """Map one tracked hand to the Windows desktop cursor and mouse.
 
-    A palm-base anchor moves the pointer relative to its initial hand position.
-    Using wrist and knuckle landmarks keeps the pointer steady as fingers open,
-    close, or form a thumbs-up. A pinch grabs and drags; an open palm releases
-    and enables wrist-twist scrolling while no mouse button is held.
+    An index-and-thumb pointing pose moves the cursor from the index fingertip.
+    A recognized pinch grabs and drags; an open palm releases and enables
+    wrist-twist scrolling while no mouse button is held.
     Thumbs-up left-clicks and a closed fist right-clicks. Input is active only after the user
     enables it in the app, and the held button is released if the hand is lost.
     """
@@ -47,6 +46,7 @@ class GestureMouseController:
         self._last_hand_seen = 0.0
         self._cursor: tuple[float, float] | None = None
         self._pointer_hand_position: tuple[float, float] | None = None
+        self._pointer_mode: str | None = None
         self._grab_origin_wrist: tuple[float, float] | None = None
         self._grab_origin_cursor: tuple[float, float] | None = None
         self._last_twist_angle: float | None = None
@@ -97,18 +97,24 @@ class GestureMouseController:
         if points.shape[0] < 21 or world.shape[0] < 21:
             return "Hand landmarks are incomplete."
 
-        anchor_x, anchor_y = self._palm_anchor(points)
         wrist_x, wrist_y = map(float, points[0, :2])
-        if not all(0.0 <= value <= 1.0 for value in (anchor_x, anchor_y, wrist_x, wrist_y)):
-            self._reset_tracking(release=True, keep_track=True)
-            return "Keep the hand in view."
-
         stable_gesture = str(getattr(track, "stable_gesture", "UNKNOWN") or "UNKNOWN")
         stable_gesture = stable_gesture.upper().replace("_", " ")
-        gesture = stable_gesture
+        candidate_gesture = str(getattr(candidate, "gesture", "UNKNOWN") or "UNKNOWN")
+        candidate_gesture = candidate_gesture.upper().replace("_", " ")
+        # These precise poses override a stale smoothed fist label.
+        gesture = (
+            candidate_gesture
+            if candidate_gesture in {"POINTING", "PINCH"}
+            else stable_gesture
+        )
         if gesture == "UNKNOWN":
-            gesture = str(getattr(candidate, "gesture", "UNKNOWN") or "UNKNOWN")
-            gesture = gesture.upper().replace("_", " ")
+            gesture = candidate_gesture
+        click_gesture = (
+            candidate_gesture
+            if candidate_gesture in {"POINTING", "PINCH"}
+            else stable_gesture
+        )
 
         palm_width = float(np.linalg.norm(world[5] - world[17]))
         pinch_distance = float(np.linalg.norm(world[4] - world[8]))
@@ -117,21 +123,37 @@ class GestureMouseController:
             if np.isfinite(palm_width) and palm_width > 1e-5
             else math.inf
         )
+        pinch_active = pinch_ratio <= self.PINCH_DOWN_RATIO
+        pointing_pose = gesture == "POINTING"
+        pointer_mode = "index" if pointing_pose else "palm"
+        if pointing_pose:
+            anchor_x, anchor_y = map(float, points[8, :2])
+        else:
+            anchor_x, anchor_y = self._palm_anchor(points)
+        if not all(
+            0.0 <= value <= 1.0
+            for value in (anchor_x, anchor_y, wrist_x, wrist_y)
+        ):
+            self._reset_tracking(release=True, keep_track=True)
+            return "Keep the hand in view."
+
         open_palm = stable_gesture == "OPEN HAND"
-        fist_pose = gesture == "CLOSED FIST"
-        grab_signal = not fist_pose and pinch_ratio <= self.PINCH_DOWN_RATIO
+        grab_signal = gesture == "PINCH" and pinch_active
         release_signal = open_palm or pinch_ratio >= self.PINCH_UP_RATIO
-        gesture_holds_cursor = gesture in {"CLOSED FIST", "THUMBS UP"}
+        gesture_holds_cursor = gesture in {"CLOSED FIST", "THUMBS UP", "PINCH"}
 
         if self._cursor is None:
             self._cursor = self._read_cursor_position()
         if self._cursor is None:
             return "Could not read the current cursor position."
         first_hand_frame = self._pointer_hand_position is None
-        if first_hand_frame:
+        pointer_mode_changed = self._pointer_mode != pointer_mode
+        if first_hand_frame or pointer_mode_changed:
             # Anchor the hand at the current OS cursor when first seen. This
-            # preserves the user's cursor position instead of snapping to center.
+            # preserves the cursor position when switching between palm and
+            # fingertip aiming instead of causing a jump.
             self._pointer_hand_position = (anchor_x, anchor_y)
+            self._pointer_mode = pointer_mode
         else:
             hand_dx = anchor_x - self._pointer_hand_position[0]
             hand_dy = anchor_y - self._pointer_hand_position[1]
@@ -198,24 +220,38 @@ class GestureMouseController:
 
         if first_hand_frame:
             # Do not click merely because a click pose was already held on activation.
-            self._previous_gesture = stable_gesture
-        elif stable_gesture == "THUMBS UP" and self._previous_gesture != "THUMBS UP" and not self._pressed:
+            self._previous_gesture = click_gesture
+        elif (
+            click_gesture == "THUMBS UP"
+            and self._previous_gesture != "THUMBS UP"
+            and not self._pressed
+            and gesture != "PINCH"
+        ):
             if not self._is_protected_target(*screen_point):
                 self._click(left=True)
                 self._notify_click(screen_point)
-        elif stable_gesture == "CLOSED FIST" and self._previous_gesture != "CLOSED FIST" and not self._pressed:
+        elif (
+            click_gesture == "CLOSED FIST"
+            and self._previous_gesture != "CLOSED FIST"
+            and not self._pressed
+            and gesture != "PINCH"
+        ):
             if not self._is_protected_target(*screen_point):
                 self._click(left=False)
                 self._notify_click(screen_point)
-        self._previous_gesture = stable_gesture
+        self._previous_gesture = click_gesture
 
         if self._pressed:
             return "Left button held: move to drag; open hand to release."
         if self._scroll_mode:
             return "Open hand: twist your wrist to scroll; no button is held."
+        if gesture == "POINTING":
+            return "Pointing: aim with the index fingertip; pinch to grab and drag."
+        if gesture == "PINCH":
+            return "Pinch detected: hold to grab and drag; open your hand to release."
         if gesture in {"OPEN HAND", "CLOSED FIST", "THUMBS UP"}:
-            return f"Detected {gesture}; palm center controls the pointer."
-        return "Palm center moves the pointer; pinch to hold and drag."
+            return f"Detected {gesture}; point with index and thumb open to aim."
+        return "Point with index and thumb open to aim; pinch to hold and drag."
 
     @staticmethod
     def _palm_anchor(points: np.ndarray) -> tuple[float, float]:
@@ -394,6 +430,7 @@ class GestureMouseController:
         self._grab_hits = 0
         self._release_hits = 0
         self._pointer_hand_position = None
+        self._pointer_mode = None
         self._previous_gesture = "UNKNOWN"
         self._last_source_seq = None
         if not keep_track:
