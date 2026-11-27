@@ -10,9 +10,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from app.coordinator import DetectorKind, FrameCoordinator
 from app.camera.capture import CameraCapture as CameraService, CameraStatus
-from app.human_detection import HumanDetectionWorker
-from app.face_recognition_worker import FaceRecognitionWorker
 from app.hand_gesture_advanced import AdvancedHandDetectionWorker
+from app.camera.noise_cleaner import CameraNoiseCleaner
+from app.gesture_mouse_control import GestureMouseController
+from app.ui.water_effects import WaterCursorOverlay
 
 
 # --- Visual constants ---
@@ -24,8 +25,6 @@ ACCENT = "#2a7ae2"
 ACCENT_HOVER = "#1d5fc4"
 DANGER = "#b42318"
 DANGER_HOVER = "#8a1a13"
-FACE_BOX_COLOR = (0, 200, 255)
-FACE_LABEL_COLOR = (0, 200, 255)
 HAND_CANDIDATE_COLOR = (0, 255, 0)
 HAND_TRACK_COLOR = (0, 200, 255)
 
@@ -38,8 +37,6 @@ def _enable_windows_dpi() -> None:
             ctypes.shcore.SetProcessDpiAwareness(1)
         except Exception:
             ctypes.windll.user32.SetProcessDPIAware()
-HUMAN_POSE_COLOR = (0, 255, 255)
-HUMAN_POSE_POINT_COLOR = (255, 0, 255)
 OFF_MESSAGE = "Camera is off"
 REQUESTED_WIDTH = 1280
 REQUESTED_HEIGHT = 720
@@ -117,7 +114,7 @@ def _font(size: int) -> ImageFont.ImageFont:
 def main() -> None:
     _enable_windows_dpi()
     root = tk.Tk()
-    root.title("HOME GUARD AI")
+    root.title("Gesture.AI")
     root.geometry("1180x760")
     root.minsize(1020, 680)
     root.configure(bg=PREVIEW_BG)
@@ -138,14 +135,11 @@ class MainWindow(ttk.Frame):
         self._placeholder: Optional[ImageTk.PhotoImage] = None
         self._placeholder_size: Optional[tuple[int, int]] = None
         self._photo: Optional[ImageTk.PhotoImage] = None
+        self._photo_size: Optional[tuple[int, int]] = None
+        self.preview_noise_cleaner_enabled = False
+        self.camera_noise_cleaner = CameraNoiseCleaner()
 
-        # Worker instances (create once, start/stop via coordinator enable/disable)
-        self.human_detection = HumanDetectionWorker(coordinator=self.coordinator, kind=DetectorKind.HUMAN)
-        self.face_recognition = FaceRecognitionWorker(
-            frame_provider=self.camera.get_frame,
-            coordinator=self.coordinator,
-            kind=DetectorKind.FACE,
-        )
+        # Gesture.AI runs the hand and gesture worker only.
         self.hand_detection = AdvancedHandDetectionWorker(
             frame_provider=self.camera.get_frame,
             coordinator=self.coordinator,
@@ -155,6 +149,14 @@ class MainWindow(ttk.Frame):
         self.coordinator.start()
 
         self._build()
+        self.water_cursor = WaterCursorOverlay(self.parent)
+        self.gesture_mouse = GestureMouseController(
+            self.parent,
+            protected_widgets=(self.quit_button,),
+            on_click=self._on_gesture_click,
+            on_button=self.water_cursor.set_pressed,
+            on_active=self.water_cursor.set_active,
+        )
         self._enable_dpi_awareness()
         self.after(50, self._tick)
 
@@ -170,7 +172,7 @@ class MainWindow(ttk.Frame):
         header.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
         header.columnconfigure(1, weight=1)
 
-        ttk.Label(header, text="HomeGuard AI", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(header, text="Gesture.AI", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w")
 
         status_frame = ttk.Frame(header)
         status_frame.grid(row=0, column=1, sticky="e")
@@ -222,43 +224,9 @@ class MainWindow(ttk.Frame):
         )
         self.toggle_button.grid(row=0, column=0, pady=4, sticky="ew")
 
-        # Human detection
-        det_frame = ttk.LabelFrame(controls, text="Human Detection", padding=8)
-        det_frame.grid(row=0, column=1, sticky="nsew", padx=6)
-        det_frame.columnconfigure(0, weight=1)
-
-        self.detection_info = ttk.Label(det_frame, text="Turn the camera on before starting detection.", font=("Segoe UI", 9), foreground=MUTED, anchor="center", wraplength=180)
-        self.detection_info.grid(row=0, column=0, pady=(0, 6), sticky="ew")
-
-        btn_row = ttk.Frame(det_frame)
-        btn_row.grid(row=1, column=0, sticky="ew")
-        btn_row.columnconfigure((0, 1), weight=1)
-
-        self.start_detection_button = ttk.Button(btn_row, text="Start", command=lambda: self._set_detector(DetectorKind.HUMAN, True), width=10, state="disabled")
-        self.start_detection_button.grid(row=0, column=0, padx=(0, 4), sticky="ew")
-        self.stop_detection_button = ttk.Button(btn_row, text="Stop", command=lambda: self._set_detector(DetectorKind.HUMAN, False), width=10, state="disabled")
-        self.stop_detection_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
-
-        # Face recognition
-        face_frame = ttk.LabelFrame(controls, text="Face Recognition", padding=8)
-        face_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
-        face_frame.columnconfigure(0, weight=1)
-
-        self.face_info = ttk.Label(face_frame, text="Turn the camera on before starting face recognition.", font=("Segoe UI", 9), foreground=MUTED, anchor="center", wraplength=180)
-        self.face_info.grid(row=0, column=0, pady=(0, 6), sticky="ew")
-
-        face_btn_row = ttk.Frame(face_frame)
-        face_btn_row.grid(row=1, column=0, sticky="ew")
-        face_btn_row.columnconfigure((0, 1), weight=1)
-
-        self.start_face_button = ttk.Button(face_btn_row, text="Start", command=lambda: self._set_detector(DetectorKind.FACE, True), width=10, state="disabled")
-        self.start_face_button.grid(row=0, column=0, padx=(0, 4), sticky="ew")
-        self.stop_face_button = ttk.Button(face_btn_row, text="Stop", command=lambda: self._set_detector(DetectorKind.FACE, False), width=10, state="disabled")
-        self.stop_face_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
-
-        # Hand detection (row 1)
+        # Hand detection
         hand_frame = ttk.LabelFrame(controls, text="Hand Detection", padding=8)
-        hand_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(6, 0))
+        hand_frame.grid(row=0, column=1, sticky="nsew", padx=6)
         hand_frame.columnconfigure(0, weight=1)
 
         self.hand_info = ttk.Label(hand_frame, text="Turn the camera on before starting hand detection.", font=("Segoe UI", 9), foreground=MUTED, anchor="center", wraplength=180)
@@ -273,65 +241,118 @@ class MainWindow(ttk.Frame):
         self.stop_hand_button = ttk.Button(hand_btn_row, text="Stop", command=lambda: self._set_detector(DetectorKind.HAND, False), width=10, state="disabled")
         self.stop_hand_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
+        self.gesture_control_button = ttk.Button(
+            hand_frame,
+            text="Enable Gesture Control",
+            command=self._toggle_gesture_control,
+            state="disabled",
+        )
+        self.gesture_control_button.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self.gesture_guide = ttk.Label(
+            hand_frame,
+            text="INDEX: move pointer  ·  THUMBS UP: left-click  ·  CLOSED FIST: right-click\nPINCH: hold/drag  ·  OPEN HAND: release  ·  WRIST TWIST: scroll",
+            font=("Segoe UI", 8),
+            foreground=MUTED,
+            anchor="center",
+            justify="center",
+            wraplength=270,
+        )
+        self.gesture_guide.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+        self.gesture_control_info = ttk.Label(
+            hand_frame,
+            text="Enable gesture control to use the cursor across your desktop.",
+            font=("Segoe UI", 8),
+            foreground=MUTED,
+            anchor="center",
+            wraplength=240,
+        )
+        self.gesture_control_info.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+
         # Quit button
         quit_frame = ttk.Frame(controls)
-        quit_frame.grid(row=1, column=2, sticky="nsew", padx=(6, 0), pady=(6, 0))
+        quit_frame.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         quit_frame.columnconfigure(0, weight=1)
-        ttk.Button(quit_frame, text="Quit", command=self._on_close, width=10).grid(row=0, column=0, sticky="e")
+        self.quit_button = ttk.Button(quit_frame, text="Quit", command=self._on_close, width=10)
+        self.quit_button.grid(row=0, column=0, sticky="e")
+
+    def _toggle_gesture_control(self) -> None:
+        if self.gesture_mouse.active:
+            self.gesture_mouse.stop()
+            self.gesture_control_button.configure(text="Enable Desktop Gesture Control")
+            self.gesture_control_info.configure(
+                text="Gesture control is off.",
+                foreground=MUTED,
+            )
+            return
+
+        if self.camera.snapshot().state != "on":
+            self.gesture_control_info.configure(
+                text="Turn on the camera and hand detection first.",
+                foreground=DANGER,
+            )
+            return
+        if not self.coordinator.is_enabled(DetectorKind.HAND):
+            self._set_detector(DetectorKind.HAND, True)
+        if self.gesture_mouse.start():
+            self.gesture_control_button.configure(text="Disable Desktop Gesture Control")
+            self.gesture_control_info.configure(
+                text="Active across the desktop · show one clear hand to begin.",
+                foreground="#1b7f3a",
+            )
+        else:
+            self.gesture_control_info.configure(
+                text="Gesture control currently requires Windows.",
+                foreground=DANGER,
+            )
+
+    def _on_gesture_click(self, screen_point=None) -> None:
+        if hasattr(self, "water_cursor"):
+            self.water_cursor.splash(screen_point)
+        water_surface = getattr(self, "water_backdrop", None)
+        if water_surface is None:
+            return
+        try:
+            if screen_point is None:
+                water_surface.tap()
+                return
+            left, top = water_surface.winfo_rootx(), water_surface.winfo_rooty()
+            x, y = screen_point[0] - left, screen_point[1] - top
+            if 0 <= x < water_surface.winfo_width() and 0 <= y < water_surface.winfo_height():
+                water_surface.tap(x, y)
+        except Exception:
+            water_surface.tap()
 
     def _toggle_camera(self) -> None:
         status = self.camera.snapshot()
         if status.state == "on":
+            self.gesture_mouse.stop()
             self.camera.stop()
-            # Stop all detector workers when camera turns off
-            self.human_detection.request_stop()
-            self.face_recognition.request_stop()
             self.hand_detection.set_enabled(False)
-            self.coordinator.disable(DetectorKind.HUMAN)
-            self.coordinator.disable(DetectorKind.FACE)
             self.coordinator.disable(DetectorKind.HAND)
         else:
             # Try to start the camera; if it fails, keep it off but refresh UI
             started = self.camera.start()
             if not started:
-                # Camera could not start — keep it off but re-enable detectors
-                # so they can be started later when camera is available
-                self.coordinator.enable(DetectorKind.HUMAN)
-                self.coordinator.enable(DetectorKind.FACE)
-                self.coordinator.enable(DetectorKind.HAND)
                 self._refresh()
                 return
-            # Re-enable all detectors and start workers after camera starts
-            self.coordinator.enable(DetectorKind.HUMAN)
-            self.coordinator.enable(DetectorKind.FACE)
+            # Start only the gesture detector when the camera becomes ready.
             self.coordinator.enable(DetectorKind.HAND)
-            # Start the worker threads
-            self.human_detection.start()
-            self.face_recognition.start()
             self.hand_detection.set_enabled(True)
         self._refresh()
 
     def _set_detector(self, kind: DetectorKind, enable: bool) -> None:
         import traceback
+        if kind != DetectorKind.HAND:
+            return
         try:
             if enable:
                 self.coordinator.enable(kind)
-                # Start the corresponding worker
-                if kind == DetectorKind.HUMAN:
-                    self.human_detection.start()
-                elif kind == DetectorKind.FACE:
-                    self.face_recognition.start()
-                elif kind == DetectorKind.HAND:
-                    self.hand_detection.set_enabled(True)
+                self.hand_detection.set_enabled(True)
             else:
                 self.coordinator.disable(kind)
-                # Stop the corresponding worker
-                if kind == DetectorKind.HUMAN:
-                    self.human_detection.request_stop()
-                elif kind == DetectorKind.FACE:
-                    self.face_recognition.request_stop()
-                elif kind == DetectorKind.HAND:
+                if kind == DetectorKind.HAND:
                     self.hand_detection.set_enabled(False)
+                    self.gesture_mouse.stop()
         except Exception as e:
             print(f"[DIAG EXCEPTION] {kind.name} {enable=}: {e}")
             traceback.print_exc()
@@ -339,8 +360,7 @@ class MainWindow(ttk.Frame):
 
     def _on_close(self) -> None:
         self._closing = True
-        self.human_detection.shutdown(timeout=1.0)
-        self.face_recognition.shutdown(timeout=1.0)
+        self.gesture_mouse.stop()
         self.hand_detection.shutdown(timeout=1.0)
         self.coordinator.stop()
         self.camera.shutdown(timeout=2.0)
@@ -350,32 +370,46 @@ class MainWindow(ttk.Frame):
         try:
             self._refresh()
         except Exception as exc:
-            self.detection_info.configure(text=f"UI error: {exc}", foreground="#b42318")
+            self.hand_info.configure(text=f"UI error: {exc}", foreground="#b42318")
         finally:
             if not self._closing:
                 self.after(33, self._tick)
 
     def _refresh(self) -> None:
         status = self.camera.snapshot()
-        frame, results, synced = self.coordinator.compose()
+        # Keep the camera preview on the newest capture frame while hand
+        # inference runs at a lower rate to avoid overloading the machine.
+        frame, results, synced = self.coordinator.compose(prefer_latest_frame=True)
 
-        # Extract results for display updates
-        human_result = results.get(DetectorKind.HUMAN)
-        face_result = results.get(DetectorKind.FACE)
+        # Gesture.AI composes only the hand detector with the camera frame.
         hand_result = results.get(DetectorKind.HAND)
+        self._process_device_share_gestures(hand_result)
+
+        if self.gesture_mouse.active:
+            if status.state != "on" or not self.coordinator.is_enabled(DetectorKind.HAND):
+                self.gesture_mouse.stop()
+                self.gesture_control_button.configure(text="Enable Gesture Control")
+                self.gesture_control_info.configure(
+                    text="Gesture control stopped because the camera or hand detection is off.",
+                    foreground=MUTED,
+                )
+            else:
+                candidates = hand_result.hand_candidates if hand_result else ()
+                tracks = hand_result.hand_visible_tracks if hand_result else ()
+                message = self.gesture_mouse.update(
+                    candidates or (),
+                    tracks or (),
+                    source_seq=hand_result.source_seq if hand_result else None,
+                )
+                color = "#1b7f3a" if message.startswith("Grab active") else ACCENT
+                self.gesture_control_info.configure(text=message, foreground=color)
 
         # Stop workers if camera is off
         if status.state != "on":
-            if human_result and human_result.human_people is not None:
-                self.coordinator.disable(DetectorKind.HUMAN)
-            if face_result and face_result.face_detections is not None:
-                self.coordinator.disable(DetectorKind.FACE)
-            if hand_result and hand_result.hand_candidates is not None:
+            if self.coordinator.is_enabled(DetectorKind.HAND):
                 self.coordinator.disable(DetectorKind.HAND)
 
         # Update display status
-        self._update_detection_display(status.state, human_result)
-        self._update_face_display(status.state, face_result)
         self._update_hand_display(hand_result)
         self._set_status_display(
             status.state,
@@ -385,119 +419,22 @@ class MainWindow(ttk.Frame):
             status.fps,
         )
         if status.state == "on" and frame is not None:
-            display = frame
-            if face_result and face_result.face_detections:
-                try:
-                    display = self._draw_face_overlays(display, face_result.face_detections)
-                except Exception:
-                    pass
+            display = (
+                self.camera_noise_cleaner.apply(frame)
+                if self.preview_noise_cleaner_enabled else frame
+            )
             if hand_result and hand_result.hand_candidates is not None:
                 try:
                     candidates = hand_result.hand_candidates or ()
                     tracks = hand_result.hand_visible_tracks or ()
-                    display = self._draw_hand_overlays(display, candidates, tracks)
-                except Exception:
-                    pass
-            if human_result and human_result.human_pose_draw_data:
-                try:
-                    display = self._draw_human_overlays(display, human_result.human_pose_draw_data)
-                except Exception:
-                    pass
-            if human_result and human_result.human_face_landmark_draw_data:
-                try:
-                    from app.face_landmarks import draw_face_landmarks
-                    display = draw_face_landmarks(
-                        display,
-                        human_result.human_face_landmark_draw_data,
+                    display = self._draw_hand_overlays(
+                        display, candidates, tracks, copy_frame=False
                     )
                 except Exception:
                     pass
             self._show_frame(display)
             return
         self._show_placeholder()
-
-    def _update_detection_display(self, camera_state: str, human_result) -> None:
-        if human_result is None:
-            worker_state = self.human_detection.get_status()
-            if camera_state == "on" and self.coordinator.is_enabled(DetectorKind.HUMAN):
-                text = worker_state.message or "Human detection is starting."
-                color = DANGER if worker_state.state == "error" else ACCENT
-                can_start = False
-                can_stop = worker_state.state != "off"
-            elif camera_state == "on":
-                text = "Human detection is off."
-                color = MUTED
-                can_start = True
-                can_stop = False
-            else:
-                text = "Turn the camera on before starting detection."
-                color = MUTED
-                can_start = False
-                can_stop = False
-        else:
-            text = (
-                f"{'HUMAN DETECTED' if human_result.human_people else 'NO HUMAN DETECTED'} "
-                f"— People: {human_result.human_people or 0}"
-            )
-            color = "#1b7f3a" if human_result.human_people else MUTED
-            can_start = False
-            can_stop = True
-        self.detection_info.configure(text=text, foreground=color)
-
-        self.start_detection_button.configure(
-            state="normal" if can_start else "disabled"
-        )
-        self.stop_detection_button.configure(
-            state="normal" if can_stop else "disabled"
-        )
-
-    def _update_face_display(self, camera_state: str, face_result) -> None:
-        if face_result is None:
-            worker_state = self.face_recognition.get_snapshot()
-            if camera_state == "on" and self.coordinator.is_enabled(DetectorKind.FACE):
-                if worker_state.state in ("off", "error"):
-                    text = (
-                        worker_state.message
-                        if worker_state.state == "error"
-                        else "Face worker stopped. Press Start to retry."
-                    )
-                    color = DANGER if worker_state.state == "error" else MUTED
-                    can_start = True
-                    can_stop = False
-                elif worker_state.state == "stopping":
-                    text = worker_state.message or "Face recognition is stopping."
-                    color = ACCENT
-                    can_start = False
-                    can_stop = False
-                else:
-                    text = worker_state.message or "Face recognition is starting."
-                    color = ACCENT
-                    can_start = False
-                    can_stop = True
-            elif camera_state == "on":
-                text = "Face recognition is off."
-                color = MUTED
-                can_start = True
-                can_stop = False
-            else:
-                text = "Turn the camera on before starting face recognition."
-                color = MUTED
-                can_start = False
-                can_stop = False
-        else:
-            count = len(face_result.face_detections) if face_result.face_detections else 0
-            text = f"Faces: {count} — all labeled UNKNOWN"
-            color = "#1b7f3a" if count else MUTED
-            can_start = False
-            can_stop = True
-        self.face_info.configure(text=text, foreground=color)
-
-        self.start_face_button.configure(
-            state="normal" if can_start else "disabled"
-        )
-        self.stop_face_button.configure(
-            state="normal" if can_stop else "disabled"
-        )
 
     def _update_hand_display(self, hand_result) -> None:
         camera_on = self.camera.snapshot().state == "on"
@@ -520,7 +457,23 @@ class MainWindow(ttk.Frame):
                 can_stop = False
         else:
             candidates = hand_result.hand_candidates or ()
-            text = f"Detected hands: {len(candidates)}"
+            tracks = hand_result.hand_visible_tracks or ()
+            gestures = []
+            for index, candidate in enumerate(candidates):
+                track = tracks[index] if index < len(tracks) else None
+                label = getattr(track, "stable_gesture", "UNKNOWN") if track else "UNKNOWN"
+                if label == "UNKNOWN":
+                    label = getattr(candidate, "gesture", "UNKNOWN")
+                if label != "UNKNOWN" and label not in gestures:
+                    gestures.append(str(label))
+            gesture_text = f" · {', '.join(gestures)}" if gestures else " · recognizing…"
+            worker_state = self.hand_detection.snapshot()
+            fps_text = (
+                f" · {worker_state.processing_fps:.0f} FPS"
+                if worker_state.processing_fps > 0
+                else ""
+            )
+            text = f"Detected hands: {len(candidates)}{gesture_text}{fps_text}"
             color = "#1b7f3a" if len(candidates) > 0 else MUTED
             can_start = False
             can_stop = True
@@ -532,6 +485,13 @@ class MainWindow(ttk.Frame):
         self.stop_hand_button.configure(
             state="normal" if can_stop else "disabled"
         )
+        self.gesture_control_button.configure(
+            state="normal" if camera_on else "disabled",
+            text="Disable Desktop Gesture Control" if self.gesture_mouse.active else "Enable Desktop Gesture Control",
+        )
+
+    def _process_device_share_gestures(self, hand_result) -> None:
+        """Hook for opt-in handoff windows provided by the liquid-glass UI."""
 
     def _set_status_display(
         self,
@@ -586,41 +546,40 @@ class MainWindow(ttk.Frame):
             image = _placeholder_image(size[0], size[1])
             self._placeholder = ImageTk.PhotoImage(image)
             self._placeholder_size = size
-        self.preview_label.configure(image=self._placeholder)
+        if self._photo is not self._placeholder:
+            self.preview_label.configure(image=self._placeholder)
         self._photo = self._placeholder
+        self._photo_size = size
 
     def _show_frame(self, frame) -> None:
         width, height = self._preview_size()
+        source_height, source_width = frame.shape[:2]
+        scale = min(width / source_width, height / source_height)
+        display_width = max(1, int(source_width * scale))
+        display_height = max(1, int(source_height * scale))
+        if (display_width, display_height) != (source_width, source_height):
+            frame = cv2.resize(
+                frame,
+                (display_width, display_height),
+                interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+            )
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
-        fitted = _fit_image(image, width, height, VIDEO_BG)
-        photo = ImageTk.PhotoImage(fitted)
-        self.preview_label.configure(image=photo)
-        self._photo = photo
+        fitted = Image.new("RGB", (width, height), VIDEO_BG)
+        fitted.paste(image, ((width - display_width) // 2, (height - display_height) // 2))
+        size = (width, height)
+        if self._photo is None or self._photo is self._placeholder or self._photo_size != size:
+            self._photo = ImageTk.PhotoImage(fitted)
+            self.preview_label.configure(image=self._photo)
+            self._photo_size = size
+        else:
+            # Reuse the Tk image object between frames to reduce allocations
+            # and avoid small preview flashes while the live feed is updating.
+            self._photo.paste(fitted)
 
-    def _draw_face_overlays(self, frame, faces):
-        """Copy frame and draw UNKNOWN face boxes on the UI thread."""
-        annotated = frame.copy()
-        for face in faces:
-            x, y, width, height = face.bbox
-            x2 = x + width
-            y2 = y + height
-            cv2.rectangle(annotated, (x, y), (x2, y2), FACE_BOX_COLOR, 2)
-            label = face.label if face.label else "UNKNOWN"
-            cv2.putText(
-                annotated,
-                label,
-                (x, max(22, y - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                FACE_LABEL_COLOR,
-                2,
-            )
-        return annotated
-
-    def _draw_hand_overlays(self, frame, candidates, tracks):
-        """Copy frame and draw hand candidates/tracks on the UI thread."""
-        annotated = frame.copy()
+    def _draw_hand_overlays(self, frame, candidates, tracks, *, copy_frame: bool = True):
+        """Draw hand candidates/tracks on the composed UI frame."""
+        annotated = frame.copy() if copy_frame else frame
         h, w = annotated.shape[:2]
 
         def _candidate_point(candidate):
@@ -705,89 +664,10 @@ class MainWindow(ttk.Frame):
                 continue
         return annotated
 
-    def _draw_human_overlays(self, frame, draw_data):
-        """Copy frame and draw human pose skeleton on the UI thread.
-
-        draw_data is a tuple of (points_norm, visible) per person:
-        - points_norm: tuple of 33 (x, y) normalized coordinates (0-1)
-        - visible: tuple of 33 booleans indicating keypoint visibility
-        """
-        annotated = frame.copy()
-        h, w = annotated.shape[:2]
-
-        # COCO 17 keypoint indices and names (MediaPipe Pose has 33 keypoints)
-        keypoint_names = [
-            "nose", "left_eye_inner", "left_eye", "left_eye_outer",
-            "right_eye_inner", "right_eye", "right_eye_outer",
-            "left_ear", "right_ear",
-            "mouth_left", "mouth_right",
-            "left_shoulder", "right_shoulder",
-            "left_elbow", "right_elbow",
-            "left_wrist", "right_wrist",
-            "left_pinky", "right_pinky",
-            "left_index", "right_index",
-            "left_thumb", "right_thumb",
-            "left_hip", "right_hip",
-            "left_knee", "right_knee",
-            "left_ankle", "right_ankle",
-            "left_heel", "right_heel",
-            "left_foot_index", "right_foot_index"
-        ]
-
-        # COCO 17 skeleton edges using keypoint_names indices
-        edges = [
-            (0, 1), (0, 2), (1, 3), (2, 4),  # nose - eyes
-            (5, 7), (6, 8),                    # ears
-            (9, 11), (10, 12),                 # mouth - shoulders
-            (11, 13), (13, 15),                # left arm
-            (12, 14), (14, 16),                # right arm
-            (11, 12),                          # shoulders
-            (11, 23), (12, 24),                # shoulders - hips
-            (23, 24),                          # hips
-            (23, 25), (25, 27),                # left leg
-            (24, 26), (26, 28),                # right leg
-        ]
-
-        for person in draw_data:
-            # Handle both tuple format (points_norm, visible) and dict format
-            if isinstance(person, tuple) and len(person) == 2:
-                points_norm, visible = person
-            elif isinstance(person, dict):
-                points_norm = person.get("points", [])
-                visible = person.get("visible", [])
-            else:
-                continue
-                
-            if not points_norm or len(points_norm) < 33:
-                continue
-                
-            # Draw keypoints that are visible
-            kps = {}
-            for i, (x_norm, y_norm) in enumerate(points_norm):
-                if i < len(visible) and visible[i]:
-                    if i < len(keypoint_names):
-                        name = keypoint_names[i]
-                        px = int(x_norm * w)
-                        py = int(y_norm * h)
-                        kps[name] = (px, py)
-                        # Draw keypoint
-                        cv2.circle(annotated, (px, py), 4, HUMAN_POSE_POINT_COLOR, -1)
-
-            # Draw skeleton edges
-            for a_idx, b_idx in edges:
-                if a_idx < len(keypoint_names) and b_idx < len(keypoint_names):
-                    a_name = keypoint_names[a_idx]
-                    b_name = keypoint_names[b_idx]
-                    if a_name in kps and b_name in kps:
-                        cv2.line(annotated, kps[a_name], kps[b_name], HUMAN_POSE_COLOR, 2)
-                    
-        return annotated
-
-
 def main() -> None:
     _enable_windows_dpi()
     root = tk.Tk()
-    root.title("HOME GUARD AI")
+    root.title("Gesture.AI")
     root.geometry("1180x760")
     root.minsize(1020, 680)
     root.configure(bg=PREVIEW_BG)

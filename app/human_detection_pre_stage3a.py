@@ -1,4 +1,4 @@
-"""Pose-only human detection for the HOME GUARD AI desktop application."""
+"""Pose-only human detection module for Gesture.AI."""
 
 from __future__ import annotations
 

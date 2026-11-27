@@ -1,4 +1,4 @@
-"""Standalone test suite for HomeGuardAI Stage 1 Face Recognition Worker.
+"""Standalone test suite for Gesture.AI Stage 1 Face Recognition Worker.
 
 Verifies:
 1. Model loading (YuNet face detector + SFace feature recognizer).
@@ -607,7 +607,7 @@ def test_issue7_worker_cleanup_on_exception() -> Tuple[bool, str]:
 def run_all_tests() -> bool:
     """Execute all tests and display structured diagnostic report."""
     print("=" * 72)
-    print("HOMEGUARDAI — STAGE 1: COMPREHENSIVE FACE RECOGNITION WORKER TESTS")
+    print("GESTURE.AI — STAGE 1: COMPREHENSIVE FACE RECOGNITION WORKER TESTS")
     print("=" * 72)
     print(f"Python version : {sys.version.split()[0]}")
     print(f"OpenCV version : {cv2.__version__}")

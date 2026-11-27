@@ -1,4 +1,4 @@
-"""Run HOME GUARD AI with: python -m app"""
+"""Run Gesture.AI with: python -m app"""
 
 from app.ui.liquid_glass_window import main
 

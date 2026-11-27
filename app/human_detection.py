@@ -1,4 +1,4 @@
-"""Pose and facial-landmark detection for the HOME GUARD AI desktop app."""
+"""Pose and facial-landmark detection module for Gesture.AI."""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ import cv2
 import numpy as np
 from app.face_landmarks import draw_face_landmarks, extract_face_landmark_draw_data
 
-POSE_MODEL = Path(__file__).resolve().parent.parent / "pose_landmarker_lite.task"
+POSE_MODEL = (
+    Path(__file__).resolve().parent.parent
+    / "models"
+    / "human"
+    / "pose_landmarker_full.task"
+)
 FACE_LANDMARK_MODEL = (
     Path(__file__).resolve().parent.parent
     / "models"
@@ -140,7 +145,9 @@ class HumanDetectionWorker:
             base_options = python.BaseOptions(model_asset_path=str(POSE_MODEL))
             options = vision.PoseLandmarkerOptions(
                 base_options=base_options,
-                running_mode=vision.RunningMode.IMAGE,
+                # VIDEO mode lets MediaPipe track detections across consecutive
+                # camera frames instead of treating every frame as unrelated.
+                running_mode=vision.RunningMode.VIDEO,
                 num_poses=2,
                 min_pose_detection_confidence=0.5,
                 min_pose_presence_confidence=0.5,
@@ -153,7 +160,7 @@ class HumanDetectionWorker:
                         base_options=python.BaseOptions(
                             model_asset_path=str(FACE_LANDMARK_MODEL)
                         ),
-                        running_mode=vision.RunningMode.IMAGE,
+                        running_mode=vision.RunningMode.VIDEO,
                         num_faces=2,
                         min_face_detection_confidence=0.5,
                         min_face_presence_confidence=0.5,
@@ -185,6 +192,7 @@ class HumanDetectionWorker:
             )
 
         frame_index = 0
+        last_timestamp_ms = 0
         latest_face_landmarks = ()
         try:
             while not self._stop.is_set():
@@ -200,15 +208,22 @@ class HumanDetectionWorker:
                     if frame is None or frame.size == 0:
                         continue
 
+                    timestamp_ms = max(
+                        int(packet.timestamp * 1000), last_timestamp_ms + 1
+                    )
+                    last_timestamp_ms = timestamp_ms
+
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    result = landmarker.detect(mp_image)
+                    result = landmarker.detect_for_video(mp_image, timestamp_ms)
                     frame_index += 1
                     if (
                         face_landmarker is not None
                         and frame_index % FACE_LANDMARK_INTERVAL_FRAMES == 0
                     ):
-                        face_result = face_landmarker.detect(mp_image)
+                        face_result = face_landmarker.detect_for_video(
+                            mp_image, timestamp_ms
+                        )
                         latest_face_landmarks = extract_face_landmark_draw_data(
                             face_result
                         )
@@ -219,14 +234,12 @@ class HumanDetectionWorker:
                     if result and result.pose_landmarks:
                         h_px, w_px = frame.shape[:2]
                         for landmarks in result.pose_landmarks:
-                            # Mirror back x coordinate since camera feed on Windows is mirrored
-                            # MediaPipe processes the mirrored frame, so lm.x goes from right(0) to left(1)
-                            # We mirror back so that x_norm=0 is left and x_norm=1 is right in display
                             points_norm = []
                             visible = []
                             for lm in landmarks:
-                                mirrored_x = 1.0 - float(lm.x)
-                                points_norm.append((mirrored_x, float(lm.y)))
+                                # CameraCapture publishes the raw frame without a flip,
+                                # and PoseLandmarker receives that same orientation.
+                                points_norm.append((float(lm.x), float(lm.y)))
                                 visible.append(bool(getattr(lm, 'visibility', 1.0) > 0.5))
                             pose_draw_data_list.append((tuple(points_norm), tuple(visible)))
                         people_count = len(result.pose_landmarks)
@@ -251,18 +264,25 @@ class HumanDetectionWorker:
                     if frame is None:
                         time.sleep(0.01)
                         continue
+                    timestamp_ms = max(
+                        time.monotonic_ns() // 1_000_000,
+                        last_timestamp_ms + 1,
+                    )
+                    last_timestamp_ms = timestamp_ms
                     annotated = frame.copy()
                     # Mirror the frame so model input matches displayed orientation
                     mirrored = cv2.flip(annotated, 1)
                     rgb = cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    result = landmarker.detect(mp_image)
+                    result = landmarker.detect_for_video(mp_image, timestamp_ms)
                     frame_index += 1
                     if (
                         face_landmarker is not None
                         and frame_index % FACE_LANDMARK_INTERVAL_FRAMES == 0
                     ):
-                        face_result = face_landmarker.detect(mp_image)
+                        face_result = face_landmarker.detect_for_video(
+                            mp_image, timestamp_ms
+                        )
                         latest_face_landmarks = extract_face_landmark_draw_data(
                             face_result
                         )
@@ -271,7 +291,7 @@ class HumanDetectionWorker:
                             tuple((1.0 - x, y) for x, y in face)
                             for face in latest_face_landmarks
                         )
-                    people_count = self._draw_poses(annotated, result)
+                    people_count = _draw_poses(annotated, result)
                     draw_face_landmarks(annotated, latest_face_landmarks)
                     with self._lock:
                         self._people = people_count

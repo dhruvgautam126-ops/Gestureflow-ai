@@ -37,7 +37,7 @@ class AdvancedHandTestWindow(ttk.Frame):
         self.after(33, self._refresh)
 
     def _build(self) -> None:
-        self.master.title("HOME GUARD AI - Advanced Hand Test")
+        self.master.title("Gesture.AI - Advanced Hand Test")
         self.master.geometry("1160x650")
         self.master.minsize(1000, 560)
         self.columnconfigure(0, weight=1)

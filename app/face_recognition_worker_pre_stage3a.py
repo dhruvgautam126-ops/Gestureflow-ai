@@ -1,4 +1,4 @@
-"""Standalone face recognition worker for HomeGuardAI (Stage 1).
+"""Standalone face recognition worker for Gesture.AI (Stage 1).
 
 Runs YuNet face detection and SFace feature extraction on a background thread.
 Consumes frames via a provider callback (e.g. CameraCapture.get_frame), produces
@@ -22,7 +22,7 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 import cv2
 import numpy as np
 
-logger = logging.getLogger("HomeGuardAI.FaceWorker")
+logger = logging.getLogger("GestureAI.FaceWorker")
 
 # Default model locations relative to project root
 _DEFAULT_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"

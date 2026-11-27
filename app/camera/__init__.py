@@ -1,1 +1,1 @@
-"""Camera module for HomeGuardAI."""
+"""Camera module for Gesture.AI."""

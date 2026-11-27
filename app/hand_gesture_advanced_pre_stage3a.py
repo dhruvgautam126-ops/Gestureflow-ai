@@ -1,4 +1,4 @@
-"""Standalone hand tracking and gesture recognition for HOME GUARD AI."""
+"""Standalone hand tracking and gesture recognition for Gesture.AI."""
 
 from __future__ import annotations
 

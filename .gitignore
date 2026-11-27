@@ -1,0 +1,49 @@
+# Local Phase 3 development environment and download caches.
+/.phase3_env/
+/.phase3_pip_cache/
+/.phase3_config/
+/.phase3_models_cache/
+/.phase3_gpu_check.txt
+
+# Python-generated files and local environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Local settings, logs, and captured output.
+.claude/
+.env
+.env.*
+!.env.example
+*.log
+/output.txt
+/test_output.txt
+/stage2_analysis.txt
+/stage3a_integration_output.txt
+/CHANGES_SUMMARY.txt
+/DELIVERABLE_SUMMARY.md
+/FINAL_STATUS.txt
+/STOP.txt
+/checkpoint_report.md
+/recovery_checkpoint_final.txt
+
+# Local or personal data should stay on this computer.
+/data/
+
+# Model weights are kept locally until their licenses are confirmed for sharing.
+*.onnx
+*.pt
+*.task
+*.pth
+*.tflite
+
+# Local backups and temporary placeholder files.
+/app_backup/
+/backups/
+*backup*.py
+*_before_*.py
+/None
+/cd
+/.gitignore.txt
+/gitignore.txt

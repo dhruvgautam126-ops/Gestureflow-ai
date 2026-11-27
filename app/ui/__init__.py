@@ -1,1 +1,1 @@
-"""Tkinter interface for HOME GUARD AI."""
+"""Tkinter interface for Gesture.AI."""

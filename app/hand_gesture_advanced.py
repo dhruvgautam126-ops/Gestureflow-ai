@@ -1,4 +1,4 @@
-"""Standalone hand tracking and gesture recognition for HOME GUARD AI."""
+"""Standalone hand tracking and gesture recognition for Gesture.AI."""
 
 from __future__ import annotations
 
@@ -15,12 +15,13 @@ import numpy as np
 from app.coordinator import DetectorKind, WorkerResult
 
 APP_ROOT = Path(__file__).resolve().parent.parent
-HAND_MODEL = APP_ROOT / "hand_landmarker.task"
-POSE_MODEL = APP_ROOT / "pose_landmarker_lite.task"
+HAND_MODEL = APP_ROOT / "models" / "hand" / "gesture_recognizer.task"
 
 MAX_HANDS = 4
 MAX_PEOPLE = 2
-DETECTION_CONFIDENCE = 0.5
+DETECTION_CONFIDENCE = 0.45
+HAND_PRESENCE_CONFIDENCE = 0.40
+HAND_TRACKING_CONFIDENCE = 0.40
 HANDEDNESS_LABEL_THRESHOLD = 0.60
 HANDEDNESS_TRACK_THRESHOLD = 0.75
 HANDEDNESS_HISTORY_SIZE = 5
@@ -37,9 +38,10 @@ PERSON_TRACK_REID_MAX_SPEED = 900.0
 PERSON_TRACK_AMBIGUITY_MARGIN = 0.15
 GESTURE_HISTORY_SIZE = 5
 GESTURE_CONFIRM_HITS = 3
-FRAME_SAMPLE_INTERVAL = 1.0 / 20.0
-POSE_INFERENCE_EVERY_N_FRAMES = 3
-MAX_POSE_ASSOCIATION_AGE = 0.45
+FRAME_SAMPLE_INTERVAL = 1.0 / 15.0
+POSE_INFERENCE_EVERY_N_FRAMES = 8
+MAX_POSE_ASSOCIATION_AGE = 0.85
+HAND_INFERENCE_MAX_WIDTH = 640
 LANDMARK_IN_FRAME_TOLERANCE = 0.05
 
 # --- Bounded lost-hand identity cache (temporary disappearance re-identification) ---
@@ -254,62 +256,30 @@ class AdvancedHandDetectionWorker:
             import mediapipe as mp
 
             vision = mp.tasks.vision
-            hand_options = vision.HandLandmarkerOptions(
+            hand_options = vision.GestureRecognizerOptions(
                 base_options=mp.tasks.BaseOptions(
                     model_asset_path=str(HAND_MODEL)
                 ),
                 running_mode=vision.RunningMode.VIDEO,
                 num_hands=MAX_HANDS,
                 min_hand_detection_confidence=DETECTION_CONFIDENCE,
-                min_hand_presence_confidence=DETECTION_CONFIDENCE,
-                min_tracking_confidence=DETECTION_CONFIDENCE,
+                min_hand_presence_confidence=HAND_PRESENCE_CONFIDENCE,
+                min_tracking_confidence=HAND_TRACKING_CONFIDENCE,
             )
 
             with ExitStack() as stack:
                 hand_detector = stack.enter_context(
-                    vision.HandLandmarker.create_from_options(hand_options)
+                    vision.GestureRecognizer.create_from_options(hand_options)
                 )
-                pose_detector = None
-                association_message = ""
-                if POSE_MODEL.is_file():
-                    pose_options = vision.PoseLandmarkerOptions(
-                        base_options=mp.tasks.BaseOptions(
-                            model_asset_path=str(POSE_MODEL)
-                        ),
-                        running_mode=vision.RunningMode.VIDEO,
-                        num_poses=MAX_PEOPLE,
-                        min_pose_detection_confidence=DETECTION_CONFIDENCE,
-                        min_pose_presence_confidence=DETECTION_CONFIDENCE,
-                        min_tracking_confidence=DETECTION_CONFIDENCE,
-                    )
-                    try:
-                        pose_detector = stack.enter_context(
-                            vision.PoseLandmarker.create_from_options(pose_options)
-                        )
-                    except Exception as exc:
-                        association_message = (
-                            "Person association unavailable: "
-                            f"pose model could not be initialized ({exc})"
-                        )
-                else:
-                    association_message = (
-                        f"Person association unavailable: pose model not found "
-                        f"at {POSE_MODEL}"
-                    )
-
-                self._set_running(association_message)
+                self._set_running("Person detection is disabled in Gesture.AI.")
                 hand_tracks: list[_HandTrack] = []
                 lost_hand_tracks: list[_LostHandIdentity] = []
                 last_packet_seq: int | None = None
-                person_tracks: list[_PersonTrack] = []
                 next_hand_id = 1
-                next_person_id = 1
                 last_timestamp = 0
                 last_sample_time = 0.0
                 last_processed_time: float | None = None
-                frame_number = 0
                 processing_fps = 0.0
-                current_people: list[_PersonTrack] = []
 
                 while not self._shutdown.is_set():
                     frame = None
@@ -322,6 +292,13 @@ class AdvancedHandDetectionWorker:
                             packet = self._packet_queue.get(timeout=0.05)
                         except queue.Empty:
                             continue
+
+                        # Prefer the newest camera image to processing an old backlog.
+                        while True:
+                            try:
+                                packet = self._packet_queue.get_nowait()
+                            except queue.Empty:
+                                break
 
                         last_packet_seq = _update_camera_session_state(
                             lost_hand_tracks,
@@ -351,8 +328,34 @@ class AdvancedHandDetectionWorker:
                     elif not self._is_enabled():
                         continue
 
-                    mirrored_frame = cv2.flip(frame, 1)
-                    rgb_frame = cv2.cvtColor(mirrored_frame, cv2.COLOR_BGR2RGB)
+                    # Keep camera preview and desktop interaction responsive on
+                    # CPU bound machines. The coordinator queue is latest-frame
+                    # only, so skipped inference frames never build a backlog.
+                    if self._coordinator is not None:
+                        now = time.monotonic()
+                        if (
+                            last_sample_time > 0.0
+                            and now - last_sample_time < FRAME_SAMPLE_INTERVAL
+                        ):
+                            continue
+                        last_sample_time = now
+
+                    height, width = frame.shape[:2]
+                    inference_frame = frame
+                    if width > HAND_INFERENCE_MAX_WIDTH:
+                        inference_height = max(
+                            1,
+                            round(height * HAND_INFERENCE_MAX_WIDTH / width),
+                        )
+                        inference_frame = cv2.resize(
+                            frame,
+                            (HAND_INFERENCE_MAX_WIDTH, inference_height),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                    # Mirror after downscaling to avoid flipping every full-size
+                    # camera frame on the inference path.
+                    inference_frame = cv2.flip(inference_frame, 1)
+                    rgb_frame = cv2.cvtColor(inference_frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(
                         image_format=mp.ImageFormat.SRGB,
                         data=rgb_frame,
@@ -363,65 +366,20 @@ class AdvancedHandDetectionWorker:
                     )
                     last_timestamp = timestamp
 
-                    hand_result = hand_detector.detect_for_video(mp_image, timestamp)
-                    height, width = mirrored_frame.shape[:2]
-                    frame_number += 1
-                    run_pose = (
-                        pose_detector is not None
-                        and (
-                            frame_number == 1
-                            or frame_number % POSE_INFERENCE_EVERY_N_FRAMES == 0
-                        )
+                    hand_result = hand_detector.recognize_for_video(
+                        mp_image,
+                        timestamp,
                     )
-                    if run_pose:
-                        pose_result = pose_detector.detect_for_video(
-                            mp_image,
-                            timestamp,
-                        )
-                        person_candidates = _make_pose_candidates(
-                            pose_result,
-                            width,
-                            height,
-                        )
-                        person_tracks, next_person_id = _update_person_tracks(
-                            person_tracks,
-                            person_candidates,
-                            next_person_id,
-                            now=time.monotonic(),
-                            frame_width=width,
-                            frame_height=height,
-                        )
-                        last_pose_time = time.monotonic()
-                        current_people = [
-                            person for person in person_tracks if person.misses == 0
-                        ]
-                    elif time.monotonic() - last_pose_time > MAX_POSE_ASSOCIATION_AGE:
-                        current_people = []
-
                     candidates = _make_hand_candidates(
                         hand_result,
                         width,
                         height,
                     )
                     candidates = _suppress_duplicate_hands(candidates)
-                    for candidate in candidates:
-                        candidate.gesture = _classify_gesture(
-                            candidate,
-                            width,
-                            height,
-                        )
-                        candidate.person_id, candidate.associated_side = (
-                            _associate_person(
-                                candidate,
-                                current_people,
-                                None,
-                                handedness=None,
-                            )
-                        )
                     hand_tracks, next_hand_id, visible_tracks = _update_hand_tracks(
                         hand_tracks,
                         candidates,
-                        current_people,
+                        (),
                         next_hand_id,
                         now=time.monotonic(),
                         frame_width=width,
@@ -446,8 +404,6 @@ class AdvancedHandDetectionWorker:
 
                     if not self._is_enabled():
                         continue
-                    annotated = mirrored_frame.copy()
-                    _draw_hands(annotated, candidates, visible_tracks)
                     completed_at = time.monotonic()
                     if last_processed_time is not None:
                         interval = completed_at - last_processed_time
@@ -460,7 +416,7 @@ class AdvancedHandDetectionWorker:
                             )
                     last_processed_time = completed_at
                     self._publish(
-                        annotated,
+                        inference_frame,
                         len(candidates),
                         processing_fps,
                     )
@@ -588,9 +544,25 @@ def _make_hand_candidates(result, width: int, height: int) -> list[_HandCandidat
                 handedness=handedness,
                 handedness_score=handedness_score,
                 quality=quality,
+                gesture=_gesture_label_for_hand(result, index),
             )
         )
     return candidates
+
+
+def _gesture_label_for_hand(result, index: int) -> str:
+    """Map the bundled model's per-hand class to the app's three labels."""
+    gesture_groups = getattr(result, "gestures", ()) or ()
+    if index >= len(gesture_groups) or not gesture_groups[index]:
+        return UNKNOWN
+    category = gesture_groups[index][0]
+    if float(getattr(category, "score", 0.0) or 0.0) < 0.55:
+        return UNKNOWN
+    return {
+        "Open_Palm": "OPEN HAND",
+        "Closed_Fist": "CLOSED FIST",
+        "Thumb_Up": "THUMBS UP",
+    }.get(str(getattr(category, "category_name", "")), UNKNOWN)
 
 
 def _landmark_signature(world_points: np.ndarray) -> np.ndarray:

@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from collections import deque
 from typing import Any
 
+HISTORY_SIZE = 5
+QUEUE_MAX_SIZE = 2
+
 
 class DetectorKind(enum.Enum):
     HUMAN = "human"
@@ -39,14 +42,14 @@ class FrameCoordinator:
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._queues: dict[DetectorKind, queue.Queue] = {
-            kind: queue.Queue(maxsize=2) for kind in DetectorKind
+            kind: queue.Queue(maxsize=QUEUE_MAX_SIZE) for kind in DetectorKind
         }
         self._enabled: dict[DetectorKind, bool] = {kind: False for kind in DetectorKind}
         self._generations: dict[DetectorKind, int] = {kind: 0 for kind in DetectorKind}
         self._results: dict[DetectorKind, WorkerResult | None] = {kind: None for kind in DetectorKind}
-        self._frame_history: deque = deque(maxlen=5)
+        self._frame_history: deque = deque(maxlen=HISTORY_SIZE)
         self._result_histories: dict[DetectorKind, deque] = {
-            kind: deque(maxlen=5) for kind in DetectorKind
+            kind: deque(maxlen=HISTORY_SIZE) for kind in DetectorKind
         }
         self._distributor_thread: threading.Thread | None = None
 
@@ -107,7 +110,15 @@ class FrameCoordinator:
             self._results[result.kind] = result
             self._result_histories[result.kind].append(result)
 
-    def compose(self) -> tuple:
+    def compose(self, *, prefer_latest_frame: bool = False) -> tuple:
+        """Return a camera frame plus the newest detector results.
+
+        By default, the frame is selected from the same camera packet as the
+        detector results. Live previews may request ``prefer_latest_frame`` so
+        the video stays current while slower detectors process fewer frames.
+        In that mode, ``synced`` is false when the preview frame and results
+        came from different camera packets.
+        """
         with self._lock:
             if not self._frame_history:
                 return None, {k: None for k in DetectorKind}, True
@@ -157,7 +168,16 @@ class FrameCoordinator:
                 else:
                     res_dict[kind] = None
 
-            return target_pkt.frame.copy(), res_dict, True
+            preview_pkt = (
+                self._frame_history[-1]
+                if prefer_latest_frame
+                else target_pkt
+            )
+            return (
+                preview_pkt.frame.copy(),
+                res_dict,
+                preview_pkt.seq == target_pkt.seq,
+            )
 
     def get_latest_result(self, kind: DetectorKind) -> WorkerResult | None:
         with self._lock:

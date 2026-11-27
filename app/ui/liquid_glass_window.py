@@ -1,4 +1,4 @@
-"""Liquid-glass-inspired desktop UI for HOME GUARD AI.
+"""Liquid-glass-inspired desktop UI for Gesture.AI.
 
 This screen reuses the existing camera and detector orchestration. It uses
 Tkinter and Pillow already present in the project, so no new UI dependency is
@@ -19,16 +19,18 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from app.hand_gesture_advanced import HAND_CONNECTIONS
 from app.ui.main_window import MainWindow as DetectionWindow, _font
+from app.ui.device_share_window import DeviceShareWindow
+from app.ui.water_effects import WaterBackdrop
 
 
-BG = "#07111d"
-SURFACE = "#142335"
-SURFACE_ALT = "#192a3d"
-STROKE = "#344b62"
+BG = "#091627"
+SURFACE = "#213a55"
+SURFACE_ALT = "#294866"
+STROKE = "#82b9d1"
 TEXT = "#edf5ff"
 MUTED = "#9aadc0"
-ACCENT = "#66d9f2"
-ACCENT_DARK = "#143c50"
+ACCENT = "#83e8ff"
+ACCENT_DARK = "#173b59"
 GREEN = "#65e6b3"
 ORANGE = "#f5bd70"
 VIDEO_BG = "#09121e"
@@ -122,7 +124,7 @@ class GlassCard(tk.Canvas):
         self._shape_ids.append(
             self.create_line(
                 x1 + 28, y1 + 1, x2 - 28, y1 + 1,
-                fill="#526b82", width=1,
+                fill="#b7e7f5", width=1,
             )
         )
         available_width = max(1, width - self._padding * 2)
@@ -145,10 +147,10 @@ class LiquidGlassWindow(DetectionWindow):
 
         brand = ttk.Frame(header.body, style="Glass.TFrame")
         brand.grid(row=0, column=0, sticky="w")
-        ttk.Label(brand, text="HOME GUARD AI", style="Brand.TLabel").grid(
+        ttk.Label(brand, text="GESTURE.AI", style="Brand.TLabel").grid(
             row=0, column=0, sticky="w"
         )
-        ttk.Label(brand, text="LIVE SAFETY CONSOLE  ·  LOCAL PROCESSING",
+        ttk.Label(brand, text="HAND GESTURE CONTROL  ·  LOCAL PROCESSING",
                   style="Subtitle.TLabel").grid(row=1, column=0, sticky="w", pady=(1, 0))
 
         telemetry = ttk.Frame(header.body, style="Glass.TFrame")
@@ -174,19 +176,26 @@ class LiquidGlassWindow(DetectionWindow):
         )
         self.toggle_button.grid(row=0, column=2, sticky="e")
 
-        main = ttk.Frame(self, style="App.TFrame")
+        main = WaterBackdrop(self)
+        self.water_backdrop = main
         main.grid(row=1, column=0, sticky="nsew", padx=18, pady=4)
-        main.columnconfigure(0, weight=3, minsize=570)
-        main.columnconfigure(1, weight=1, minsize=300)
-        main.rowconfigure(0, weight=1)
 
         preview = GlassCard(main, padding=16)
-        preview.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         preview.body.columnconfigure(0, weight=1)
         preview.body.rowconfigure(1, weight=1)
-        ttk.Label(preview.body, text="LIVE CAMERA", style="CardTitle.TLabel").grid(
-            row=0, column=0, sticky="w", pady=(0, 10)
+        preview_header = ttk.Frame(preview.body, style="Glass.TFrame")
+        preview_header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        preview_header.columnconfigure(0, weight=1)
+        ttk.Label(preview_header, text="LIVE CAMERA", style="CardTitle.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
+        self.noise_cleaner_button = ttk.Button(
+            preview_header,
+            text="Noise Cleaner: OFF",
+            command=self._toggle_noise_cleaner,
+            style="Secondary.TButton",
+        )
+        self.noise_cleaner_button.grid(row=0, column=1, sticky="e")
         self.preview_label = ttk.Label(
             preview.body,
             text="",
@@ -195,30 +204,15 @@ class LiquidGlassWindow(DetectionWindow):
         )
         self.preview_label.grid(row=1, column=0, sticky="nsew")
 
-        sensors = ttk.Frame(main, style="App.TFrame")
-        sensors.grid(row=0, column=1, sticky="nsew")
-        sensors.columnconfigure(0, weight=1)
-        for row in range(3):
-            sensors.rowconfigure(row, weight=1, uniform="sensor")
-
-        self._build_detector_card(
-            sensors, 0, "PEOPLE", "Pose detection · up to 2 people",
-            "detection_info", "start_detection_button", "stop_detection_button",
-            lambda: self._set_detector(self._human_kind(), True),
-            lambda: self._set_detector(self._human_kind(), False),
-        )
-        self._build_detector_card(
-            sensors, 1, "FACE", "YuNet + SFace · labels are local",
-            "face_info", "start_face_button", "stop_face_button",
-            lambda: self._set_detector(self._face_kind(), True),
-            lambda: self._set_detector(self._face_kind(), False),
-        )
-        self._build_detector_card(
-            sensors, 2, "HANDS & GESTURES", "Up to 4 tracked hands · per-hand labels",
+        hand_card = self._build_detector_card(
+            main, 0, "GESTURE CONTROL", "Up to 4 tracked hands · local processing",
             "hand_info", "start_hand_button", "stop_hand_button",
             lambda: self._set_detector(self._hand_kind(), True),
             lambda: self._set_detector(self._hand_kind(), False),
         )
+        self._preview_window_id = main.create_window(12, 12, anchor="nw", window=preview)
+        self._hand_window_id = main.create_window(12, 12, anchor="nw", window=hand_card)
+        main.bind("<Configure>", self._layout_main, add="+")
 
         footer = GlassCard(self, height=58, padding=12, fill=SURFACE_ALT)
         footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(10, 16))
@@ -230,22 +224,65 @@ class LiquidGlassWindow(DetectionWindow):
             anchor="w",
         )
         self.notice_value.grid(row=0, column=0, sticky="ew")
-        ttk.Button(
+        self.share_button = ttk.Button(
+            footer.body,
+            text="Device Share",
+            command=self._open_device_share,
+            style="Secondary.TButton",
+        )
+        self.share_button.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.quit_button = ttk.Button(
             footer.body,
             text="Exit",
             command=self._on_close,
             style="Secondary.TButton",
-        ).grid(row=0, column=1, sticky="e", padx=(12, 0))
+        )
+        self.quit_button.grid(row=0, column=2, sticky="e", padx=(12, 0))
 
-    @staticmethod
-    def _human_kind():
-        from app.coordinator import DetectorKind
-        return DetectorKind.HUMAN
+    def _open_device_share(self) -> None:
+        window = getattr(self, "_device_share_window", None)
+        try:
+            if window is not None and window.winfo_exists():
+                window.deiconify()
+                window.lift()
+                return
+        except Exception:
+            pass
+        self._device_share_window = DeviceShareWindow(
+            self.parent, on_arm=self._arm_device_share_gesture
+        )
 
-    @staticmethod
-    def _face_kind():
-        from app.coordinator import DetectorKind
-        return DetectorKind.FACE
+    def _arm_device_share_gesture(self) -> bool:
+        if self.camera.snapshot().state != "on":
+            return False
+        if self.gesture_mouse.active:
+            self.gesture_mouse.stop()
+            self.gesture_control_button.configure(text="Enable Desktop Gesture Control")
+            self.gesture_control_info.configure(
+                text="Desktop cursor control paused for file handoff.", foreground=MUTED
+            )
+        if not self.coordinator.is_enabled(self._hand_kind()):
+            self._set_detector(self._hand_kind(), True)
+        return self.coordinator.is_enabled(self._hand_kind())
+
+    def _process_device_share_gestures(self, hand_result) -> None:
+        window = getattr(self, "_device_share_window", None)
+        try:
+            if window is not None and window.winfo_exists():
+                candidates = hand_result.hand_candidates if hand_result else ()
+                tracks = hand_result.hand_visible_tracks if hand_result else ()
+                source_seq = hand_result.source_seq if hand_result else None
+                window.process_hand_gestures(
+                    candidates or (), tracks or (), source_seq=source_seq
+                )
+        except Exception:
+            # A closing share window must not interrupt camera preview updates.
+            return
+
+    def _toggle_noise_cleaner(self) -> None:
+        self.preview_noise_cleaner_enabled = not self.preview_noise_cleaner_enabled
+        state = "ON" if self.preview_noise_cleaner_enabled else "OFF"
+        self.noise_cleaner_button.configure(text=f"Noise Cleaner: {state}")
 
     @staticmethod
     def _hand_kind():
@@ -265,7 +302,6 @@ class LiquidGlassWindow(DetectionWindow):
         stop_command,
     ) -> None:
         card = GlassCard(parent, padding=14)
-        card.grid(row=row, column=0, sticky="nsew", pady=(0, 9) if row < 2 else 0)
         card.body.columnconfigure(0, weight=1)
         ttk.Label(card.body, text=title, style="CardTitle.TLabel").grid(
             row=0, column=0, sticky="w"
@@ -299,6 +335,56 @@ class LiquidGlassWindow(DetectionWindow):
         setattr(self, start_name, start_button)
         setattr(self, stop_name, stop_button)
 
+        if info_name == "hand_info":
+            self.gesture_control_button = ttk.Button(
+                card.body,
+                text="Enable Desktop Gesture Control",
+                command=self._toggle_gesture_control,
+                style="Secondary.TButton",
+                state="disabled",
+            )
+            self.gesture_control_button.grid(row=4, column=0, sticky="ew", pady=(9, 0))
+            self.gesture_guide = ttk.Label(
+                card.body,
+                text="INDEX: move pointer  ·  THUMBS UP: left-click  ·  CLOSED FIST: right-click\nPINCH: hold/drag  ·  OPEN HAND: release  ·  WRIST TWIST: scroll",
+                style="Muted.TLabel",
+                wraplength=280,
+                justify="left",
+            )
+            self.gesture_guide.grid(row=5, column=0, sticky="ew", pady=(7, 0))
+            self.gesture_control_info = ttk.Label(
+                card.body,
+                text="Enable gesture control to use the cursor across your desktop.",
+                style="Muted.TLabel",
+                wraplength=260,
+                justify="left",
+            )
+            self.gesture_control_info.grid(row=6, column=0, sticky="ew", pady=(5, 0))
+        return card
+
+    def _layout_main(self, event) -> None:
+        width, height = max(1, event.width), max(1, event.height)
+        margin, gap = 12, 14
+        hand_width = max(300, min(370, round(width * 0.30)))
+        preview_width = max(1, width - margin * 2 - gap - hand_width)
+        content_height = max(1, height - margin * 2)
+        self.water_backdrop.coords(self._preview_window_id, margin, margin)
+        self.water_backdrop.itemconfigure(
+            self._preview_window_id,
+            width=preview_width,
+            height=content_height,
+        )
+        self.water_backdrop.coords(
+            self._hand_window_id,
+            margin + preview_width + gap,
+            margin,
+        )
+        self.water_backdrop.itemconfigure(
+            self._hand_window_id,
+            width=hand_width,
+            height=content_height,
+        )
+
     def _show_placeholder(self) -> None:
         width, height = self._preview_size()
         if self._placeholder is None or self._placeholder_size != (width, height):
@@ -320,12 +406,14 @@ class LiquidGlassWindow(DetectionWindow):
                       fill="#9aadc0", font=_font(10), anchor="mm")
             self._placeholder = ImageTk.PhotoImage(image)
             self._placeholder_size = (width, height)
-        self.preview_label.configure(image=self._placeholder)
+        if self._photo is not self._placeholder:
+            self.preview_label.configure(image=self._placeholder)
         self._photo = self._placeholder
+        self._photo_size = (width, height)
 
-    def _draw_hand_overlays(self, frame, candidates, tracks):
+    def _draw_hand_overlays(self, frame, candidates, tracks, *, copy_frame: bool = True):
         """Draw each tracked hand independently on the shared preview frame."""
-        annotated = frame.copy()
+        annotated = frame.copy() if copy_frame else frame
         height, width = annotated.shape[:2]
         palette = (
             (94, 217, 242),
@@ -369,6 +457,8 @@ class LiquidGlassWindow(DetectionWindow):
                 left, top = xy[0]
 
             gesture = getattr(track, "stable_gesture", "UNKNOWN") if track else "UNKNOWN"
+            if gesture == "UNKNOWN":
+                gesture = getattr(candidate, "gesture", "UNKNOWN")
             person_id = getattr(track, "person_id", None) if track else None
             side = getattr(track, "associated_side", None) if track else None
             if person_id is not None and side:
@@ -415,7 +505,7 @@ def main() -> None:
             except Exception:
                 pass
     root = tk.Tk()
-    root.title("HOME GUARD AI · Live Safety Console")
+    root.title("Gesture.AI · Hand Control")
     root.geometry("1440x900")
     root.minsize(1120, 720)
     configure_glass_style(root)
