@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$ExpectedBranch = 'master'
+$ExpectedBranch = 'main'
 $TaskName = 'GestureAI-Auto-Push'
 $LogDirectory = Join-Path $env:LOCALAPPDATA 'GestureAI'
 $LogPath = Join-Path $LogDirectory 'auto-push.log'
