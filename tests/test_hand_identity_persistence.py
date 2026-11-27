@@ -1,7 +1,7 @@
-"""Hand identity persistence tests for Gesture.AI.
+"""Hand identity persistence tests for GestureFlow AI.
 
 These tests exercise the bounded lost-hand identity cache in
-``app/hand_gesture_advanced.py`` using synthetic landmarks only.  No webcam
+``gestureflow_ai/hand_gesture_advanced.py`` using synthetic landmarks only.  No webcam
 and no MediaPipe model execution is required.
 
 Run with:
@@ -15,7 +15,7 @@ import unittest
 
 import numpy as np
 
-from app.hand_gesture_advanced import (
+from gestureflow_ai.hand_gesture_advanced import (
     HAND_LOST_TRACK_GRACE_SECONDS,
     HAND_LOST_TRACK_MAX,
     AdvancedHandDetectionWorker,

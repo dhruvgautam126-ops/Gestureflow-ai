@@ -13,8 +13,8 @@ from typing import Any
 
 import numpy as np
 
-from app.camera.capture import CameraFramePacket
-from app.coordinator import FrameCoordinator, DetectorKind, WorkerResult
+from gestureflow_ai.camera.capture import CameraFramePacket
+from gestureflow_ai.coordinator import FrameCoordinator, DetectorKind, WorkerResult
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,0 @@
-# Install these only in the separate Phase 3 environment. Keep DirectML last:
-# it supplies the ONNX Runtime module with the DirectML execution provider.
-onnxruntime==1.32.0
-rtmlib==0.0.16
-ultralytics==8.4.219
-lap==0.5.14
-insightface==2.1
-onnxruntime-directml==1.24.4

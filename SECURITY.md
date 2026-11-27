@@ -1,21 +1,9 @@
-# Security Policy
+# Security
 
-## Supported Versions
+GestureFlow AI runs its camera and gesture processing locally. Optional device
+sharing is intended for trusted devices on the same Wi-Fi network. Do not expose
+the sharing receiver directly to the public internet.
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
-
-## Reporting a Vulnerability
-
-Use this section to tell people how to report a vulnerability.
-
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Report a security issue privately to the project owner before publishing details
+or sharing a fix. Do not include passwords, API keys, access tokens, or other
+private credentials in source files, issues, or screenshots.

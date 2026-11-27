@@ -1,49 +1,39 @@
-# Local Phase 3 development environment and download caches.
-/.phase3_env/
-/.phase3_pip_cache/
-/.phase3_config/
-/.phase3_models_cache/
-/.phase3_gpu_check.txt
-
-# Python-generated files and local environments.
+# Python runtime and generated files
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+/.gestureflow_env/
 
-# Local settings, logs, and captured output.
-.claude/
+# Local editor settings, logs, and environment secrets
+/.claude/
 .env
 .env.*
 !.env.example
 *.log
-/output.txt
-/test_output.txt
-/stage2_analysis.txt
-/stage3a_integration_output.txt
-/CHANGES_SUMMARY.txt
-/DELIVERABLE_SUMMARY.md
-/FINAL_STATUS.txt
-/STOP.txt
-/checkpoint_report.md
-/recovery_checkpoint_final.txt
-
-# Local or personal data should stay on this computer.
 /data/
 
-# Model weights are kept locally until their licenses are confirmed for sharing.
+# Local caches and generated model files
+/.phase3_config/
+/.phase3_models_cache/
+/.phase3_pip_cache/
+/.phase3_gpu_check.txt
 *.onnx
 *.pt
-*.task
 *.pth
 *.tflite
+*.task
+!/models/gesture/gesture_recognizer.task
 
-# Local backups and temporary placeholder files.
-/app_backup/
-/backups/
+# Temporary files and local backups
+*.bak
 *backup*.py
 *_before_*.py
+/app_backup/
+/backups/
 /None
 /cd
 /.gitignore.txt
 /gitignore.txt
+/output.txt
+/test_output.txt

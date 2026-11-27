@@ -9,8 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ExpectedBranch = 'main'
-$TaskName = 'GestureAI-Auto-Push'
-$LogDirectory = Join-Path $env:LOCALAPPDATA 'GestureAI'
+$TaskName = 'GestureFlowAI-Auto-Push'
+$LogDirectory = Join-Path $env:LOCALAPPDATA 'GestureFlowAI'
 $LogPath = Join-Path $LogDirectory 'auto-push.log'
 
 function Write-Log {
@@ -95,20 +95,21 @@ function Sync-Repository {
     # Remove previously tracked Python bytecode from the published index while
     # leaving local cache files untouched. Do this after staging so Git does not
     # immediately add the tracked cache files back.
-    Invoke-Git -GitArgs @('rm', '-r', '--cached', '--ignore-unmatch', '--', 'app/__pycache__', 'app/camera/__pycache__', 'app/ui/__pycache__') | Out-Null
+    Invoke-Git -GitArgs @('rm', '-r', '--cached', '--ignore-unmatch', '--', 'gestureflow_ai/__pycache__', 'gestureflow_ai/camera/__pycache__', 'gestureflow_ai/ui/__pycache__') | Out-Null
     $staged = @(Invoke-Git -GitArgs @('diff', '--cached', '--name-only'))
 
     if ($staged.Count -gt 0) {
         Test-StagedFilesForSecrets
         Invoke-Git -GitArgs @('diff', '--cached', '--check') | Out-Null
 
-        $message = 'Auto sync Gesture.AI {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm')
+        $message = 'Auto sync GestureFlow AI {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Invoke-Git -GitArgs @('commit', '-m', $message) | Out-Null
         Write-Log ('Created a commit with {0} staged file changes.' -f $staged.Count)
     }
 
-    $pushOutput = & git -C $RepoRoot push --set-upstream origin $ExpectedBranch 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        Invoke-Git -GitArgs @('push', '--set-upstream', 'origin', $ExpectedBranch) | Out-Null
+    } catch {
         Write-Log 'Push did not complete. Check GitHub Desktop sign-in and the repository status; it will retry later.'
         return $false
     }
@@ -130,7 +131,7 @@ function Install-AutoPushTask {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Waits for Gesture.AI file changes, then safely commits and pushes them to the existing GitHub main branch.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Waits for GestureFlow AI file changes, then safely commits and pushes them to the existing GitHub main branch.' -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     Write-Log 'Automatic sync was enabled at Windows sign-in.'
     Write-Host 'Automatic GitHub sync is enabled. It runs hidden after sign-in and waits for changes to settle before syncing.'
