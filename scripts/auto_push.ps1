@@ -59,11 +59,11 @@ function Assert-SyncTarget {
 }
 
 function Get-WorkingSignature {
-    $items = & git -C $RepoRoot status --porcelain --untracked-files=all 2>&1
+    $items = @(& git -C $RepoRoot status --porcelain --untracked-files=all 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not read the repository status.'
     }
-    return [string]::Join("`n", [string[]]$items)
+    return ($items -join "`n")
 }
 
 function Test-StagedFilesForSecrets {
@@ -130,7 +130,7 @@ function Install-AutoPushTask {
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Waits for Gesture.AI file changes, then safely commits and pushes them to the existing GitHub master branch.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Waits for Gesture.AI file changes, then safely commits and pushes them to the existing GitHub main branch.' -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     Write-Log 'Automatic sync was enabled at Windows sign-in.'
     Write-Host 'Automatic GitHub sync is enabled. It runs hidden after sign-in and waits for changes to settle before syncing.'
