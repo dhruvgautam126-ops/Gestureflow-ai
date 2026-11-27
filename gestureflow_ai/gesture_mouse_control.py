@@ -16,9 +16,9 @@ class GestureMouseController:
 
     A palm-base anchor moves the pointer relative to its initial hand position.
     Using wrist and knuckle landmarks keeps the pointer steady as fingers open,
-    close, or form a thumbs-up. A pinch grabs and drags; an open palm releases.
-    Thumbs-up left-clicks and a closed fist right-clicks.
-    Wrist rotation while grabbing scrolls. Input is active only after the user
+    close, or form a thumbs-up. A pinch grabs and drags; an open palm releases
+    and enables wrist-twist scrolling while no mouse button is held.
+    Thumbs-up left-clicks and a closed fist right-clicks. Input is active only after the user
     enables it in the app, and the held button is released if the hand is lost.
     """
 
@@ -51,6 +51,7 @@ class GestureMouseController:
         self._grab_origin_cursor: tuple[float, float] | None = None
         self._last_twist_angle: float | None = None
         self._twist_accumulator = 0.0
+        self._scroll_mode = False
         self._previous_gesture = "UNKNOWN"
         self._last_source_seq: int | None = None
 
@@ -77,6 +78,7 @@ class GestureMouseController:
         if hand is None:
             # Preserve the OS cursor and reacquire a fresh hand anchor later.
             self._pointer_hand_position = None
+            self._reset_scroll_state()
             if self._last_hand_seen and now - self._last_hand_seen >= self.LOST_HAND_RELEASE_SECONDS:
                 self._reset_tracking(release=True, keep_track=True)
             if now - self._last_hand_seen >= self.HAND_RESELECT_SECONDS:
@@ -161,8 +163,6 @@ class GestureMouseController:
                         float(cursor_origin[0]),
                         float(cursor_origin[1]),
                     )
-                    self._last_twist_angle = self._palm_angle(points)
-                    self._twist_accumulator = 0.0
                     self._notify_button(True)
                     self._notify_click(screen_point)
         else:
@@ -180,7 +180,21 @@ class GestureMouseController:
                     round(self._grab_origin_cursor[0] + dx * width),
                     round(self._grab_origin_cursor[1] + dy * height),
                 )
+
+        # Scroll only with an open palm and no held mouse button. Keeping this
+        # separate from pinch-drag prevents the OS from selecting items while
+        # the wheel is moving.
+        if self._pressed:
+            self._reset_scroll_state()
+        elif open_palm and pinch_ratio >= self.PINCH_UP_RATIO:
+            if not self._scroll_mode:
+                self._last_twist_angle = self._palm_angle(points)
+                self._twist_accumulator = 0.0
+                self._scroll_mode = True
+            else:
                 self._apply_twist_scroll(points)
+        else:
+            self._reset_scroll_state()
 
         if first_hand_frame:
             # Do not click merely because a click pose was already held on activation.
@@ -197,6 +211,8 @@ class GestureMouseController:
 
         if self._pressed:
             return "Left button held: move to drag; open hand to release."
+        if self._scroll_mode:
+            return "Open hand: twist your wrist to scroll; no button is held."
         if gesture in {"OPEN HAND", "CLOSED FIST", "THUMBS UP"}:
             return f"Detected {gesture}; palm center controls the pointer."
         return "Palm center moves the pointer; pinch to hold and drag."
@@ -302,9 +318,13 @@ class GestureMouseController:
         self._pressed = False
         self._grab_origin_wrist = None
         self._grab_origin_cursor = None
+        self._reset_scroll_state()
+        self._release_hits = 0
+
+    def _reset_scroll_state(self) -> None:
+        self._scroll_mode = False
         self._last_twist_angle = None
         self._twist_accumulator = 0.0
-        self._release_hits = 0
 
     def _notify_button(self, pressed: bool) -> None:
         if self.on_button:
@@ -336,6 +356,8 @@ class GestureMouseController:
     def _apply_twist_scroll(self, points: np.ndarray) -> None:
         angle = self._palm_angle(points)
         if angle is None:
+            self._last_twist_angle = None
+            self._twist_accumulator = 0.0
             return
         if self._last_twist_angle is None:
             self._last_twist_angle = angle

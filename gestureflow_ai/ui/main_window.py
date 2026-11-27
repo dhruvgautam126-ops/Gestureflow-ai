@@ -250,7 +250,7 @@ class MainWindow(ttk.Frame):
         self.gesture_control_button.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self.gesture_guide = ttk.Label(
             hand_frame,
-            text="INDEX: move pointer  ·  THUMBS UP: left-click  ·  CLOSED FIST: right-click\nPINCH: hold/drag  ·  OPEN HAND: release  ·  WRIST TWIST: scroll",
+            text="INDEX: move pointer  ·  THUMBS UP: left-click  ·  CLOSED FIST: right-click\nPINCH: hold/drag  ·  OPEN HAND + WRIST TWIST: scroll",
             font=("Segoe UI", 8),
             foreground=MUTED,
             anchor="center",
