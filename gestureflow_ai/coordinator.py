@@ -201,27 +201,26 @@ class FrameCoordinator:
                 self._shutdown.wait(0.005)
                 continue
             last_seq = packet.seq
-            frame_copy_for_history = packet.frame.copy()
-            packet_for_history = type(packet)(
-                packet.seq, packet.timestamp, frame_copy_for_history
+            # Keep one owned copy per capture packet and share it between the
+            # preview history and read-only detector inputs. The workers create
+            # their own transformed buffers before resizing/flipping frames.
+            shared_frame = packet.frame.copy()
+            packet_for_distribution = type(packet)(
+                packet.seq, packet.timestamp, shared_frame
             )
 
             with self._lock:
-                self._frame_history.append(packet_for_history)
+                self._frame_history.append(packet_for_distribution)
                 enabled_kinds = [k for k, v in self._enabled.items() if v]
 
             for kind in enabled_kinds:
-                frame_copy_for_worker = packet.frame.copy()
-                packet_copy = type(packet)(
-                    packet.seq, packet.timestamp, frame_copy_for_worker
-                )
                 q = self._queues[kind]
                 try:
-                    q.put_nowait(packet_copy)
+                    q.put_nowait(packet_for_distribution)
                 except queue.Full:
                     try:
                         q.get_nowait()
-                        q.put_nowait(packet_copy)
+                        q.put_nowait(packet_for_distribution)
                     except (queue.Empty, queue.Full):
                         pass
 

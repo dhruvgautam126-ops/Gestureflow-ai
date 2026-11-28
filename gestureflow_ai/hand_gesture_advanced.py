@@ -19,9 +19,9 @@ HAND_MODEL = APP_ROOT / "models" / "gesture" / "gesture_recognizer.task"
 
 MAX_HANDS = 4
 MAX_PEOPLE = 2
-DETECTION_CONFIDENCE = 0.45
-HAND_PRESENCE_CONFIDENCE = 0.40
-HAND_TRACKING_CONFIDENCE = 0.40
+DETECTION_CONFIDENCE = 0.40
+HAND_PRESENCE_CONFIDENCE = 0.35
+HAND_TRACKING_CONFIDENCE = 0.45
 HANDEDNESS_LABEL_THRESHOLD = 0.60
 HANDEDNESS_TRACK_THRESHOLD = 0.75
 HANDEDNESS_HISTORY_SIZE = 5
@@ -38,7 +38,7 @@ PERSON_TRACK_REID_MAX_SPEED = 900.0
 PERSON_TRACK_AMBIGUITY_MARGIN = 0.15
 GESTURE_HISTORY_SIZE = 5
 GESTURE_CONFIRM_HITS = 3
-FRAME_SAMPLE_INTERVAL = 1.0 / 15.0
+FRAME_SAMPLE_INTERVAL = 1.0 / 20.0
 POSE_INFERENCE_EVERY_N_FRAMES = 8
 MAX_POSE_ASSOCIATION_AGE = 0.85
 HAND_INFERENCE_MAX_WIDTH = 640
@@ -518,7 +518,9 @@ def _make_hand_candidates(result, width: int, height: int) -> list[_HandCandidat
             & (image_points[:, 1] >= -LANDMARK_IN_FRAME_TOLERANCE)
             & (image_points[:, 1] <= 1.0 + LANDMARK_IN_FRAME_TOLERANCE)
         )]
-        if np.count_nonzero(in_frame) < 12:
+        # Keep partially visible hands when the wrist and enough of the
+        # landmarks are still in view; fast movement often clips fingertips.
+        if np.count_nonzero(in_frame) < 8:
             continue
 
         x_min, y_min = np.min(visible_points, axis=0)[:2]

@@ -589,7 +589,9 @@ class MainWindow(ttk.Frame):
                 try:
                     x, y = float(wrist[0]), float(wrist[1])
                     if 0 <= x < w and 0 <= y < h:
-                        return int(x), int(y)
+                        # The detector mirrors its input for natural gesture
+                        # control. Flip the landmark back for the raw preview.
+                        return max(0, w - 1 - int(x)), int(y)
                 except Exception:
                     pass
             # Try .x, .y (normalized)
@@ -658,7 +660,7 @@ class MainWindow(ttk.Frame):
                     else:
                         continue
                     w = annotated.shape[1]
-                    x = w - x
+                    x = w - 1 - x
                     cv2.circle(annotated, (x, y), 4, (0, 200, 255), -1)
             except Exception:
                 continue
