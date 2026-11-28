@@ -533,7 +533,6 @@ class MainWindow(ttk.Frame):
             self.toggle_button.configure(state="normal", text="Turn Camera ON")
 
     def _preview_size(self) -> tuple[int, int]:
-        self.preview_label.update_idletasks()
         width = self.preview_label.winfo_width()
         height = self.preview_label.winfo_height()
         if width < 200 or height < 120:
