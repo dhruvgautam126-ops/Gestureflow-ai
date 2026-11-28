@@ -9,7 +9,9 @@ soft borders, and highlights to give a similar frosted-glass feel.
 from __future__ import annotations
 
 import ctypes
+import queue
 import sys
+import threading
 import tkinter as tk
 from tkinter import ttk
 
@@ -17,6 +19,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from gestureflow_ai.camera.capture import CameraCapture
 from gestureflow_ai.hand_gesture_advanced import HAND_CONNECTIONS
 from gestureflow_ai.ui.main_window import MainWindow as DetectionWindow, _font
 from gestureflow_ai.ui.device_share_window import DeviceShareWindow
@@ -137,6 +140,9 @@ class LiquidGlassWindow(DetectionWindow):
     """New dashboard layout backed by the existing detection window logic."""
 
     def _build(self) -> None:
+        self._camera_scan_results = queue.SimpleQueue()
+        self._camera_scan_running = False
+        self._camera_notice_override = ""
         self.configure(style="App.TFrame")
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -189,13 +195,40 @@ class LiquidGlassWindow(DetectionWindow):
         ttk.Label(preview_header, text="LIVE CAMERA", style="CardTitle.TLabel").grid(
             row=0, column=0, sticky="w"
         )
+        source_controls = ttk.Frame(preview_header, style="Glass.TFrame")
+        source_controls.grid(row=0, column=1, sticky="e", padx=(8, 10))
+        ttk.Label(source_controls, text="INPUT", style="Muted.TLabel").grid(
+            row=0, column=0, sticky="e", padx=(0, 6)
+        )
+        self.camera_source_var = tk.StringVar(
+            master=self, value=f"Camera {self.camera.camera_index}"
+        )
+        self.camera_source_box = ttk.Combobox(
+            source_controls,
+            textvariable=self.camera_source_var,
+            values=(f"Camera {self.camera.camera_index}",),
+            state="readonly",
+            width=10,
+        )
+        self.camera_source_box.grid(row=0, column=1, sticky="e")
+        self.camera_source_box.bind(
+            "<<ComboboxSelected>>", self._select_camera_input
+        )
+        self.camera_scan_button = ttk.Button(
+            source_controls,
+            text="Find",
+            command=self._scan_camera_inputs,
+            style="Secondary.TButton",
+            width=6,
+        )
+        self.camera_scan_button.grid(row=0, column=2, sticky="e", padx=(6, 0))
         self.noise_cleaner_button = ttk.Button(
             preview_header,
             text="Noise Cleaner: OFF",
             command=self._toggle_noise_cleaner,
             style="Secondary.TButton",
         )
-        self.noise_cleaner_button.grid(row=0, column=1, sticky="e")
+        self.noise_cleaner_button.grid(row=0, column=2, sticky="e")
         self.preview_label = ttk.Label(
             preview.body,
             text="",
@@ -238,6 +271,7 @@ class LiquidGlassWindow(DetectionWindow):
             style="Secondary.TButton",
         )
         self.quit_button.grid(row=0, column=2, sticky="e", padx=(12, 0))
+        self.after(100, self._poll_camera_scan)
 
     def _open_device_share(self) -> None:
         window = getattr(self, "_device_share_window", None)
@@ -283,6 +317,122 @@ class LiquidGlassWindow(DetectionWindow):
         self.preview_noise_cleaner_enabled = not self.preview_noise_cleaner_enabled
         state = "ON" if self.preview_noise_cleaner_enabled else "OFF"
         self.noise_cleaner_button.configure(text=f"Noise Cleaner: {state}")
+
+    def _select_camera_input(self, _event=None) -> None:
+        """Switch the numeric camera source while capture is stopped."""
+        try:
+            camera_index = int(self.camera_source_var.get().rsplit(" ", 1)[1])
+            selected = self.camera.set_camera_index(camera_index)
+        except (IndexError, ValueError):
+            selected = False
+            camera_index = self.camera.camera_index
+
+        if selected:
+            self._set_camera_notice(
+                f"Camera {camera_index} selected. Turn the camera on to check its feed."
+            )
+        else:
+            self.camera_source_var.set(f"Camera {self.camera.camera_index}")
+            self._set_camera_notice("Turn the camera off before changing the input.")
+
+    def _scan_camera_inputs(self) -> None:
+        """Find camera inputs that can actually provide frames, without freezing the UI."""
+        if self._camera_scan_running:
+            return
+        if self.camera.snapshot().state not in ("off", "error"):
+            self._set_camera_notice("Turn the camera off before searching for inputs.")
+            return
+
+        self._camera_scan_running = True
+        self.camera_scan_button.configure(state="disabled")
+        self.camera_source_box.configure(state="disabled")
+        self.toggle_button.configure(state="disabled", text="Searching Cameras…")
+        self._set_camera_notice(
+            "Searching for camera feeds. For a phone, connect by a data USB cable and select Webcam in its USB options."
+        )
+        threading.Thread(
+            target=self._camera_scan_worker,
+            name="GestureFlowCameraScan",
+            daemon=True,
+        ).start()
+
+    def _camera_scan_worker(self) -> None:
+        try:
+            result = (CameraCapture.find_available_indices(max_index=10), "")
+        except Exception as exc:
+            result = ((), str(exc))
+        self._camera_scan_results.put(result)
+
+    def _poll_camera_scan(self) -> None:
+        if self._closing:
+            return
+        try:
+            indices, error = self._camera_scan_results.get_nowait()
+        except queue.Empty:
+            indices = None
+            error = ""
+
+        if indices is not None:
+            self._camera_scan_running = False
+            self.camera_scan_button.configure(state="normal")
+            current_index = self.camera.camera_index
+
+            if error:
+                self.camera_source_box.configure(
+                    values=(f"Camera {current_index}",), state="readonly"
+                )
+                self.camera_source_var.set(f"Camera {current_index}")
+                self._set_camera_notice(f"Camera search failed: {error}")
+            elif indices:
+                choices = tuple(f"Camera {index}" for index in indices)
+                self.camera_source_box.configure(values=choices, state="readonly")
+                selected_index = current_index if current_index in indices else indices[0]
+                if selected_index != current_index:
+                    self.camera.set_camera_index(selected_index)
+                self.camera_source_var.set(f"Camera {selected_index}")
+                if len(indices) == 1 and indices[0] == 0:
+                    self._set_camera_notice(
+                        "Only Camera 0 returned video. If that is the laptop camera, choose Webcam in the phone's USB options, then search again."
+                    )
+                else:
+                    self._set_camera_notice(
+                        "Working camera inputs: "
+                        + ", ".join(str(index) for index in indices)
+                        + ". Select one and turn the camera on to preview it."
+                    )
+            else:
+                self.camera_source_box.configure(
+                    values=(f"Camera {current_index}",), state="readonly"
+                )
+                self.camera_source_var.set(f"Camera {current_index}")
+                self._set_camera_notice(
+                    "No camera returned video. Check Windows camera access and choose Webcam in the phone's USB options, then search again."
+                )
+
+            self._refresh()
+
+        if not self._closing:
+            self.after(100, self._poll_camera_scan)
+
+    def _set_camera_notice(self, text: str) -> None:
+        self._camera_notice_override = text
+        self.notice_value.configure(text=text)
+
+    def _toggle_camera(self) -> None:
+        if not self._camera_scan_running:
+            self._camera_notice_override = ""
+        super()._toggle_camera()
+
+    def _set_status_display(
+        self, state: str, message: str, width: int, height: int, fps: float
+    ) -> None:
+        super()._set_status_display(state, message, width, height, fps)
+        if self._camera_scan_running:
+            self.camera_source_box.configure(state="disabled")
+            self.toggle_button.configure(state="disabled", text="Searching Cameras…")
+            self.notice_value.configure(text=self._camera_notice_override)
+        elif state == "off" and self._camera_notice_override:
+            self.notice_value.configure(text=self._camera_notice_override)
 
     @staticmethod
     def _hand_kind():

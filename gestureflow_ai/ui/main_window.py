@@ -501,6 +501,11 @@ class MainWindow(ttk.Frame):
         height: int,
         fps: float,
     ) -> None:
+        camera_source_box = getattr(self, "camera_source_box", None)
+        if camera_source_box is not None:
+            camera_source_box.configure(
+                state="readonly" if state in ("off", "error") else "disabled"
+            )
         self.state_value.configure(
             text={"off": "OFF", "starting": "STARTING", "on": "ON", "stopping": "STOPPING", "error": "ERROR"}.get(state, state.upper()),
             foreground={ "off": MUTED, "starting": ACCENT, "on": "#1b7f3a", "stopping": "#e8a838", "error": DANGER }.get(state, TEXT),

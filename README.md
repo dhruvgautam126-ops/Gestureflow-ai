@@ -15,6 +15,26 @@ Open PowerShell in this folder and run:
 This uses the existing local Python environment. No package installation is
 needed to start it on the computer where that environment is already set up.
 
+## Use a phone camera over USB
+
+GestureFlow reads USB webcam sources exposed by Windows through OpenCV. Connect
+the phone with a data-capable USB cable, unlock it, open the USB options
+notification, and choose **Webcam** (some phones call this **USB webcam**).
+Keep the phone's webcam preview active, click **Find** in GestureFlow, select
+the phone's camera input, and turn the camera on. If the phone offers a webcam
+preview, choose its rear camera for a wider, clearer view. [Google's Pixel
+instructions](https://support.google.com/pixelcamera/answer/14274129) show the
+USB menu flow; the exact menu depends on the phone.
+
+USB debugging alone does not send camera video to the laptop. The phone must
+support USB webcam/UVC mode in its Android version and manufacturer software.
+Android's platform includes UVC webcam support on Android 14 and newer devices,
+but each phone maker must enable it, so the option is not available on every
+phone ([Android platform documentation](https://source.android.com/docs/core/camera/webcam)).
+If the phone has no **Webcam** USB option, it needs a phone-side camera streaming
+app or a vendor-provided webcam mode; laptop-only Python cannot bypass Android's
+camera permission. No extra PC package is installed by GestureFlow.
+
 ## Included features
 
 - Live camera preview with optional image noise reduction.

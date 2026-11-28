@@ -47,9 +47,58 @@ class CameraFramePacket:
 
 
 class CameraCapture:
-    """Open webcam 0, keep the latest frame, and release the device on stop."""
+    """Open a selected camera, keep its latest frame, and release it on stop."""
 
-    def __init__(self) -> None:
+    @staticmethod
+    def find_available_indices(max_index: int = 10) -> tuple[int, ...]:
+        """Return camera indices that can open and deliver a real frame.
+
+        Probing runs in the caller's thread, so UI callers should run it in a
+        worker. Each temporary capture is released before the next index is
+        checked. The probe intentionally checks for a frame instead of trusting
+        ``isOpened()``; some unused camera indices still report as open.
+        """
+        if max_index < 1:
+            return ()
+
+        available: list[int] = []
+        for camera_index in range(max_index):
+            for backend in (cv2.CAP_DSHOW, None):
+                camera = None
+                try:
+                    camera = (
+                        cv2.VideoCapture(camera_index)
+                        if backend is None
+                        else cv2.VideoCapture(camera_index, backend)
+                    )
+                    if not camera.isOpened():
+                        continue
+
+                    # Keep the discovery pass lightweight; normal capture uses
+                    # the requested preview resolution when the user starts it.
+                    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    for attempt in range(3):
+                        ok, frame = camera.read()
+                        if ok and frame is not None and frame.size:
+                            available.append(camera_index)
+                            break
+                        if attempt < 2:
+                            time.sleep(0.05)
+                    if available and available[-1] == camera_index:
+                        break
+                except (cv2.error, OSError):
+                    continue
+                finally:
+                    if camera is not None:
+                        camera.release()
+
+        return tuple(available)
+
+    def __init__(self, camera_index: int = CAMERA_INDEX) -> None:
+        if camera_index < 0:
+            raise ValueError("camera_index must be zero or greater")
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -62,6 +111,25 @@ class CameraCapture:
         self._last_tick = 0.0
         self._seq: int = 0
         self._packet: CameraFramePacket | None = None
+        self._camera_index = camera_index
+
+    @property
+    def camera_index(self) -> int:
+        with self._lock:
+            return self._camera_index
+
+    def set_camera_index(self, camera_index: int) -> bool:
+        """Select a camera while capture is stopped; return False if it is busy."""
+        if camera_index < 0:
+            raise ValueError("camera_index must be zero or greater")
+        with self._lock:
+            if self._state not in ("off", "error"):
+                return False
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                return False
+            self._camera_index = camera_index
+            return True
 
     def start(self) -> bool:
         """Begin opening the camera. Returns True on success."""
@@ -153,9 +221,11 @@ class CameraCapture:
     def _run(self) -> None:
         camera = None
         try:
-            camera = self._open_camera()
+            with self._lock:
+                camera_index = self._camera_index
+            camera = self._open_camera(camera_index)
             if camera is None:
-                self._mark_open_failed()
+                self._mark_open_failed(camera_index)
                 return
 
             width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -193,7 +263,7 @@ class CameraCapture:
                     self._state = "off"
                     self._message = ""
 
-    def _mark_open_failed(self) -> None:
+    def _mark_open_failed(self, camera_index: int) -> None:
         with self._lock:
             self._frame = None
             self._packet = None
@@ -202,7 +272,10 @@ class CameraCapture:
                 self._message = ""
             else:
                 self._state = "error"
-                self._message = "Webcam could not be opened."
+                self._message = (
+                    f"Camera {camera_index} could not be opened. Check Windows camera access; "
+                    "for a phone, select Webcam in its USB options and use Find again."
+                )
 
     def _publish(self, frame) -> None:
         now = time.perf_counter()
@@ -224,11 +297,11 @@ class CameraCapture:
                 frame=frame,
             )
 
-    def _open_camera(self):
-        camera = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+    def _open_camera(self, camera_index: int):
+        camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         if not camera.isOpened():
             camera.release()
-            camera = cv2.VideoCapture(CAMERA_INDEX)
+            camera = cv2.VideoCapture(camera_index)
         if not camera.isOpened():
             camera.release()
             return None
